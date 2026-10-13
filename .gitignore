@@ -1,0 +1,8 @@
+.env
+cookies.json
+amul_bot.log
+screenshots/
+__pycache__/
+*.py[cod]
+venv/
+.venv/

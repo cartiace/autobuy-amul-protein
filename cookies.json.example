@@ -1,0 +1,22 @@
+[
+  {
+    "name": "connect.sid",
+    "value": "s%3Aexample_session_id_here",
+    "domain": "shop.amul.com",
+    "path": "/",
+    "expires": 1893456000,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "jsessionid",
+    "value": "s%3Aexample_jsessionid_here",
+    "domain": "shop.amul.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  }
+]

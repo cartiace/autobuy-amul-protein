@@ -1,0 +1,15 @@
+[Unit]
+Description=Amul stock monitor and automatic checkout
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Automation
+ExecStart=%h/Automation/venv/bin/python %h/Automation/main.py
+Restart=on-failure
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
