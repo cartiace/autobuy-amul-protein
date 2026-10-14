@@ -53,6 +53,7 @@ class MultiUserTelegramBot:
         self.checkout_semaphore = asyncio.Semaphore(5)
         # Per-user active checkout cancel events: {chat_id: asyncio.Event}
         self.active_checkouts: Dict[int, asyncio.Event] = {}
+        self.admin_chat_id = str(os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID", "")).strip()
 
     def _get_user_keyboard(self, is_active: bool) -> InlineKeyboardMarkup:
         if is_active:
@@ -114,10 +115,13 @@ class MultiUserTelegramBot:
                 f"👋 <b>Welcome to Amul Stock Monitor & Auto-Buy!</b>\n\n"
                 f"I monitor 24/7 for <b>Amul Chocolate Whey Protein (60 sachets)</b> restocks "
                 f"and automatically checkout as soon as your regional warehouse gets inventory.\n\n"
+                f"⚠️ <b>Before you begin, please ensure:</b>\n"
+                f"1. You already have an active account on <a href='https://shop.amul.com'>shop.amul.com</a>\n"
+                f"2. Your <b>delivery address is already saved</b> in your Amul account profile\n\n"
                 f"👉 <b>Step 1 of 2: Delivery Location</b>\n"
                 f"Please reply with your <b>6-digit delivery Pincode</b> (e.g. <code>201310</code> or <code>110001</code>):"
             )
-            await update.message.reply_text(msg, parse_mode="HTML")
+            await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
@@ -272,6 +276,49 @@ class MultiUserTelegramBot:
                 parse_mode="HTML"
             )
 
+    async def cmd_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        if not self.admin_chat_id or str(chat_id) != str(self.admin_chat_id):
+            await update.message.reply_text("⛔ <b>Access Denied:</b> Admin command only.", parse_mode="HTML")
+            return
+
+        with database.get_db() as db:
+            users = db.query(database.User).order_by(database.User.created_at.desc()).all()
+            if not users:
+                await update.message.reply_text("ℹ️ No users registered yet.", parse_mode="HTML")
+                return
+
+            total = len(users)
+            active_count = sum(1 for u in users if u.is_auto_buy_active()[0])
+            paused_count = total - active_count
+
+            lines = [
+                f"👑 <b>Admin Dashboard: User Directory</b>",
+                f"👥 <b>Total:</b> {total} | 🟢 <b>Active:</b> {active_count} | ⏸️ <b>Paused:</b> {paused_count}\n"
+            ]
+
+            for i, u in enumerate(users, 1):
+                is_act, _, reason = u.is_auto_buy_active()
+                stat_emoji = "🟢" if is_act else "⏸️"
+                user_tag = f"@{u.telegram_username}" if u.telegram_username else f"User {u.telegram_chat_id}"
+                phone_str = f"+91 {u.phone_number}" if u.phone_number else "No Phone"
+                pincode_str = u.pincode or "N/A"
+                warehouse_str = u.substore_name or "N/A"
+
+                lines.append(
+                    f"{i}. {stat_emoji} <b>{user_tag}</b> (<code>{u.telegram_chat_id}</code>)\n"
+                    f"   📱 {phone_str} | 📍 <code>{pincode_str}</code>\n"
+                    f"   🏬 {warehouse_str} | State: <i>{u.onboarding_state}</i>\n"
+                )
+
+            full_msg = "\n".join(lines)
+            if len(full_msg) > 4000:
+                chunks = [full_msg[i:i+4000] for i in range(0, len(full_msg), 4000)]
+                for c in chunks:
+                    await update.message.reply_text(c, parse_mode="HTML")
+            else:
+                await update.message.reply_text(full_msg, parse_mode="HTML")
+
     async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         text = update.message.text.strip()
@@ -293,7 +340,8 @@ class MultiUserTelegramBot:
                         f"📍 <b>Regional Warehouse:</b> {res['warehouse_name']}\n\n"
                         f"👉 <b>Step 2 of 2: Login to Amul</b>\n"
                         f"Please reply with your <b>10-digit registered Amul Mobile Number</b> (e.g. <code>9876543210</code>):\n\n"
-                        f"<i>Amul will send you an official SMS OTP to verify.</i>"
+                        f"<i>(Make sure your delivery address is saved in this Amul account)</i>\n"
+                        f"Amul will send you an official SMS OTP to verify."
                     )
                     await update.message.reply_text(msg, parse_mode="HTML")
                 else:
@@ -582,6 +630,7 @@ class MultiUserTelegramBot:
         self.app.add_handler(CommandHandler(["resume", "unpause"], self.cmd_resume))
         self.app.add_handler(CommandHandler("pincode", self.cmd_pincode))
         self.app.add_handler(CommandHandler(["cancel", "abort"], self.cmd_cancel))
+        self.app.add_handler(CommandHandler(["users", "admin"], self.cmd_users))
 
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
         self.app.add_handler(MessageHandler(filters.Document.ALL, self.handle_document_message))
