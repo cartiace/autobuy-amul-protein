@@ -1,12 +1,12 @@
 [Unit]
-Description=Amul Multi-User Stock Monitor & Auto-Checkout Platform
+Description=Amul stock monitor and automatic checkout
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=%h/Desktop/Automation
-ExecStart=%h/Desktop/Automation/venv/bin/python %h/Desktop/Automation/server.py
+ExecStart=%h/Desktop/Automation/venv/bin/python %h/Desktop/Automation/main.py
 Restart=on-failure
 RestartSec=30
 Environment=PYTHONUNBUFFERED=1
