@@ -88,7 +88,7 @@ Supports both **Single-User Dedicated Bot** and **Multi-Tenant Public SaaS Serve
 
 ### 1. Clone & Enter Directory
 ```bash
-git clone <your-repo-or-path>
+git clone https://github.com/cartiace/autobuy-amul-protein.git
 cd Automation
 ```
 
