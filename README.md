@@ -1,5 +1,11 @@
 # 🥛 Amul Stock Monitor & Auto-Checkout Platform
 
+[![Telegram Bot](https://img.shields.io/badge/Telegram-@amulzebot-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/amulzebot)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Playwright](https://img.shields.io/badge/Playwright-Stealth-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev/)
+
+> 🤖 **Live Telegram Bot:** [@amulzebot](https://t.me/amulzebot) — Click to start monitoring and auto-purchasing Amul Whey Protein across India!
+
 A high-performance Python automation engine for **Amul's e-commerce platform (`shop.amul.com`)**, specifically designed to monitor stock for high-demand products like **Amul Chocolate Whey Protein (Pack of 60 sachets)** and trigger rapid checkout with automated UPI payment dispatch as soon as stock becomes available.
 
 Supports both **Single-User Dedicated Bot** and **Multi-Tenant Public SaaS Server (500+ Concurrent Users)** with zero-friction Telegram onboarding, automated All-India pincode-to-warehouse resolution, AES-256 session encryption, and central aggregated warehouse polling.
