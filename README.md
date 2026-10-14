@@ -9,7 +9,7 @@ Supports both **Single-User Dedicated Bot** and **Multi-Tenant Public SaaS Serve
 ## ⚡ Key Architectural Features
 
 1. **🚀 500+ User Multi-Tenant SaaS Architecture (`server.py`):**
-   - **Zero-Friction Conversational Onboarding:** Any user can message the Telegram bot (`/start`), provide their 6-digit delivery pincode and session cookies, and the bot automatically maps and manages their account.
+   - **Zero-Friction In-Chat Phone + OTP Onboarding (`amul_auth.py`):** Any user can message the Telegram bot (`/start`), provide their 6-digit delivery pincode and mobile number, and enter the SMS OTP directly in Telegram. No browser extensions, developer tools, or manual `cookies.json` export required!
    - **All-India Automated Pincode-to-Warehouse Resolver:** Resolves any Indian pincode (e.g. `201310` -> `UP NCR`, `110001` -> `Delhi`, `560001` -> `Karnataka / Bangalore`) to its underlying StoreHippo warehouse in milliseconds without DevTools inspection.
    - **Central Aggregated Polling (Anti-DDoS):** Instead of 500 users polling Amul independently (which causes IP bans), the engine queries `SELECT DISTINCT substore_id` and polls each unique regional warehouse once (~15 to 25 requests/min across India total).
    - **AES-256 Fernet Encryption at Rest:** User session tokens and cookies are encrypted using AES-256 before storage in PostgreSQL / SQLite.
@@ -37,7 +37,7 @@ Supports both **Single-User Dedicated Bot** and **Multi-Tenant Public SaaS Serve
 
 | Command | Action |
 |---|---|
-| `/start` | Start interactive conversational onboarding or view dashboard |
+| `/start` | Start interactive conversational onboarding (Pincode & Phone + OTP) or view dashboard |
 | `/status` | View personal monitoring status, stock, warehouse, and purchase timeout |
 | `/pause 1m` | Timeout/pause auto-purchases for **1 month** (30 days) |
 | `/pause 2m` | Timeout/pause auto-purchases for **2 months** (60 days) |
@@ -45,9 +45,9 @@ Supports both **Single-User Dedicated Bot** and **Multi-Tenant Public SaaS Serve
 | `/pause` | Opens interactive buttons: `[ ⏸️ 1 Month ]` `[ ⏸️ 2 Months ]` `[ ⏸️ 3 Months ]` `[ ▶️ Resume ]` |
 | `/resume` | Resume auto-purchases immediately |
 | `/pincode` | Update delivery pincode (automatically updates warehouse) |
+| `/relogin` | Re-authenticate phone number and SMS OTP directly via Telegram |
 | `/cancel` | Cancel any active checkout/payment authorization and clear cart |
 | `/help` | Display list of commands and guide |
-| `/help_cookies` | 1-minute visual guide on how to link session cookies |
 
 ---
 
@@ -56,8 +56,11 @@ Supports both **Single-User Dedicated Bot** and **Multi-Tenant Public SaaS Serve
 ```text
 .
 ├── server.py             # Multi-User Production Server (500+ users, DB, Central Poller)
+├── amul_auth.py          # Native In-Chat Phone + SMS OTP Login Engine via Stealth Playwright
 ├── database.py           # Multi-tenant SQLite/PostgreSQL schema + AES-256 encryption
 ├── pincode_resolver.py   # All-India automated pincode-to-substore resolution engine
+├── central_poller.py     # Aggregated stock poller querying unique regional substores
+├── multi_user_bot.py     # Multi-user Telegram Bot controller & conversational onboarding
 ├── central_poller.py     # Aggregated stock poller querying unique regional substores
 ├── multi_user_bot.py     # Multi-user Telegram Bot controller & conversational onboarding
 ├── main.py               # Dedicated single-user orchestrator loop
