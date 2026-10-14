@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Automation
-ExecStart=%h/Automation/venv/bin/python %h/Automation/main.py
+WorkingDirectory=%h/Desktop/Automation
+ExecStart=%h/Desktop/Automation/venv/bin/python %h/Desktop/Automation/main.py
 Restart=on-failure
 RestartSec=30
 Environment=PYTHONUNBUFFERED=1
