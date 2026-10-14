@@ -1,5 +1,6 @@
 .env
 cookies.json
+bot_state.json
 amul_bot.log
 screenshots/
 __pycache__/
