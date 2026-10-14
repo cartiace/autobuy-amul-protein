@@ -66,6 +66,9 @@ class MultiUserTelegramBot:
                 [
                     InlineKeyboardButton("📊 My Status", callback_data="status"),
                     InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
+                ],
+                [
+                    InlineKeyboardButton("🛑 Stop & Delete Account", callback_data="confirm_delete"),
                 ]
             ]
         else:
@@ -76,8 +79,22 @@ class MultiUserTelegramBot:
                 ],
                 [
                     InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
+                ],
+                [
+                    InlineKeyboardButton("🛑 Stop & Delete Account", callback_data="confirm_delete"),
                 ]
             ]
+        return InlineKeyboardMarkup(keyboard)
+
+    def _get_delete_confirm_keyboard(self) -> InlineKeyboardMarkup:
+        keyboard = [
+            [
+                InlineKeyboardButton("🗑️ Yes, Delete My Account", callback_data="do_delete"),
+            ],
+            [
+                InlineKeyboardButton("↩️ Nevermind, Keep Active", callback_data="cancel_delete"),
+            ]
+        ]
         return InlineKeyboardMarkup(keyboard)
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,7 +150,8 @@ class MultiUserTelegramBot:
             "• <code>/resume</code> - Resume auto-purchases immediately\n"
             "• <code>/pincode 110001</code> - Update your delivery pincode\n"
             "• <code>/cancel</code> - Cancel any ongoing purchase or UPI QR payment\n"
-            "• <code>/relogin</code> - Re-authenticate your Amul account with SMS OTP"
+            "• <code>/relogin</code> - Re-authenticate your Amul account with SMS OTP\n"
+            "• <code>/stop</code> - Stop monitoring and delete your account from the bot"
         )
         await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -276,6 +294,27 @@ class MultiUserTelegramBot:
                 parse_mode="HTML"
             )
 
+    async def cmd_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        user = database.get_user(chat_id)
+        if not user:
+            await update.message.reply_text("ℹ️ You don't have an active account registered with the bot.")
+            return
+
+        msg = (
+            "🛑 <b>Stop Monitoring & Delete Account?</b>\n\n"
+            "This will completely:\n"
+            "• Remove you from 24/7 warehouse stock monitoring\n"
+            "• Cancel all automatic purchases & alerts\n"
+            "• Permanently delete your encrypted session tokens\n\n"
+            "<i>Are you sure you want to stop and delete your account?</i>"
+        )
+        await update.message.reply_text(
+            msg,
+            parse_mode="HTML",
+            reply_markup=self._get_delete_confirm_keyboard()
+        )
+
     async def cmd_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         if not self.admin_chat_id or str(chat_id) != str(self.admin_chat_id):
@@ -284,7 +323,9 @@ class MultiUserTelegramBot:
 
         with database.get_db() as db:
             users = db.query(database.User).order_by(database.User.created_at.desc()).all()
-            if not users:
+            deleted_logs = database.get_deleted_user_logs(limit=10)
+
+            if not users and not deleted_logs:
                 await update.message.reply_text("ℹ️ No users registered yet.", parse_mode="HTML")
                 return
 
@@ -294,7 +335,7 @@ class MultiUserTelegramBot:
 
             lines = [
                 f"👑 <b>Admin Dashboard: User Directory</b>",
-                f"👥 <b>Total:</b> {total} | 🟢 <b>Active:</b> {active_count} | ⏸️ <b>Paused:</b> {paused_count}\n"
+                f"👥 <b>Total Active Users:</b> {total} | 🟢 <b>Active:</b> {active_count} | ⏸️ <b>Paused:</b> {paused_count}\n"
             ]
 
             for i, u in enumerate(users, 1):
@@ -310,6 +351,14 @@ class MultiUserTelegramBot:
                     f"   📱 {phone_str} | 📍 <code>{pincode_str}</code>\n"
                     f"   🏬 {warehouse_str} | State: <i>{u.onboarding_state}</i>\n"
                 )
+
+            if deleted_logs:
+                lines.append(f"🗑️ <b>Deleted Users Audit Log ({len(deleted_logs)}):</b>")
+                for d in deleted_logs:
+                    del_time = d.deleted_at.strftime("%d %b %H:%M") if d.deleted_at else ""
+                    tag = f"@{d.telegram_username}" if d.telegram_username else f"<code>{d.telegram_chat_id}</code>"
+                    phone = f"+91 {d.phone_number}" if d.phone_number else "N/A"
+                    lines.append(f"• 🚫 {tag} ({phone}) | 📍 {d.pincode or 'N/A'} | <i>{del_time}</i>")
 
             full_msg = "\n".join(lines)
             if len(full_msg) > 4000:
@@ -522,6 +571,56 @@ class MultiUserTelegramBot:
                 parse_mode="HTML",
                 reply_markup=self._get_user_keyboard(is_active)
             )
+        elif data == "confirm_delete":
+            msg = (
+                "🛑 <b>Stop Monitoring & Delete Account?</b>\n\n"
+                "This will completely:\n"
+                "• Remove you from 24/7 warehouse stock monitoring\n"
+                "• Cancel all automatic purchases & alerts\n"
+                "• Permanently delete your encrypted session tokens\n\n"
+                "<i>Are you sure you want to stop and delete your account?</i>"
+            )
+            await query.edit_message_text(
+                msg,
+                parse_mode="HTML",
+                reply_markup=self._get_delete_confirm_keyboard()
+            )
+        elif data == "cancel_delete":
+            is_active, _, _ = user.is_auto_buy_active()
+            await query.edit_message_text(
+                "✅ <b>Action Cancelled!</b>\n\nYour monitoring and auto-buy settings remain active.",
+                parse_mode="HTML",
+                reply_markup=self._get_user_keyboard(is_active)
+            )
+        elif data == "do_delete":
+            if chat_id in self.active_checkouts:
+                self.active_checkouts[chat_id].set()
+            await auth_manager.cancel_session(chat_id)
+
+            log_entry = database.delete_and_log_user(chat_id, reason="User self-deleted via Telegram")
+
+            await query.edit_message_text(
+                "👋 <b>Your account has been deleted.</b>\n\n"
+                "All monitoring and auto-checkout processes have been stopped, and your session tokens "
+                "have been completely removed from our system.\n\n"
+                "Thank you for using Amul Auto-Buy! If you ever want to return, simply send /start.",
+                parse_mode="HTML"
+            )
+
+            if self.admin_chat_id and str(chat_id) != str(self.admin_chat_id) and log_entry:
+                try:
+                    admin_notifier = TelegramNotifier(token=self.token, chat_id=self.admin_chat_id)
+                    u_tag = f"@{log_entry.telegram_username}" if log_entry.telegram_username else f"User {chat_id}"
+                    phone = f"+91 {log_entry.phone_number}" if log_entry.phone_number else "N/A"
+                    admin_msg = (
+                        f"🗑️ <b>Account Deleted Notice:</b>\n"
+                        f"• User: {u_tag} (<code>{chat_id}</code>)\n"
+                        f"• Phone: {phone} | Pincode: <code>{log_entry.pincode or 'N/A'}</code>\n"
+                        f"• Warehouse: {log_entry.substore_name or 'N/A'}"
+                    )
+                    await admin_notifier.send_message_async(admin_msg)
+                except Exception as e:
+                    logger.warning(f"Could not send admin deletion alert: {e}")
 
     async def dispatch_user_checkout(self, user: User, product_name: str, stock_qty: int):
         """
@@ -630,6 +729,7 @@ class MultiUserTelegramBot:
         self.app.add_handler(CommandHandler(["resume", "unpause"], self.cmd_resume))
         self.app.add_handler(CommandHandler("pincode", self.cmd_pincode))
         self.app.add_handler(CommandHandler(["cancel", "abort"], self.cmd_cancel))
+        self.app.add_handler(CommandHandler(["stop", "delete_account", "deregister"], self.cmd_stop))
         self.app.add_handler(CommandHandler(["users", "admin"], self.cmd_users))
 
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))

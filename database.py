@@ -151,6 +151,18 @@ class Order(Base):
 
     user = relationship("User", back_populates="orders")
 
+class DeletedUserLog(Base):
+    __tablename__ = "deleted_user_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_chat_id = Column(BigInteger, index=True)
+    telegram_username = Column(String(100), nullable=True)
+    phone_number = Column(String(20), nullable=True)
+    pincode = Column(String(10), nullable=True)
+    substore_name = Column(String(100), nullable=True)
+    reason = Column(String(255), default="User requested deletion")
+    deleted_at = Column(DateTime, default=datetime.utcnow)
+
 # ==========================================
 # Database Helper Utilities
 # ==========================================
@@ -295,5 +307,47 @@ def get_users_for_substore(substore_id: str) -> List[User]:
             db.query(User)
             .filter(User.substore_id == substore_id)
             .filter(User.onboarding_state == "READY")
+            .all()
+        )
+
+def delete_and_log_user(chat_id: int, reason: str = "User self-deleted via Telegram") -> Optional[DeletedUserLog]:
+    """
+    Permanently deletes a user from the active database and writes an audit log
+    entry with their information and deletion timestamp.
+    """
+    with get_db() as db:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if not user:
+            return None
+
+        # Create audit log record
+        log_entry = DeletedUserLog(
+            telegram_chat_id=user.telegram_chat_id,
+            telegram_username=user.telegram_username,
+            phone_number=user.phone_number,
+            pincode=user.pincode,
+            substore_name=user.substore_name,
+            reason=reason,
+            deleted_at=datetime.utcnow()
+        )
+        db.add(log_entry)
+
+        # Log to file / stdout logger
+        logger.warning(
+            f"🚫 [ACCOUNT DELETED] chat_id={user.telegram_chat_id} | username=@{user.telegram_username} | "
+            f"phone={user.phone_number} | pincode={user.pincode} | warehouse={user.substore_name} | reason='{reason}'"
+        )
+
+        db.delete(user)
+        db.commit()
+        return log_entry
+
+def get_deleted_user_logs(limit: int = 50) -> List[DeletedUserLog]:
+    """Returns the most recent audit records of deleted accounts."""
+    with get_db() as db:
+        return (
+            db.query(DeletedUserLog)
+            .order_by(DeletedUserLog.deleted_at.desc())
+            .limit(limit)
             .all()
         )

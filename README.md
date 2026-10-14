@@ -53,6 +53,8 @@ Supports both **Single-User Dedicated Bot** and **Multi-Tenant Public SaaS Serve
 | `/pincode` | Update delivery pincode (automatically updates warehouse) |
 | `/relogin` | Re-authenticate phone number and SMS OTP directly via Telegram |
 | `/cancel` | Cancel any active checkout/payment authorization and clear cart |
+| `/stop` | Stop monitoring and permanently delete account with confirmation |
+| `/users` | (Admin) View registered user directory and deleted accounts audit |
 | `/help` | Display list of commands and guide |
 
 ---
