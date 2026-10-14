@@ -2,8 +2,13 @@
 cookies.json
 bot_state.json
 amul_bot.log
+*.log
 screenshots/
 __pycache__/
 *.py[cod]
 venv/
 .venv/
+*.db
+*.sqlite3
+pincode_cache.json
+scratch/
