@@ -26,6 +26,7 @@ class AmulAutoCheckout:
         target_url: str = "https://shop.amul.com/en/product/amul-chocolate-whey-protein-34-g-or-pack-of-60-sachets",
         substore_id: Optional[str] = None,
         pincode: Optional[str] = None,
+        substore_alias: Optional[str] = None,
         headless: bool = True,
         quantity: int = 1,
         gateway: str = "easebuzz",
@@ -37,6 +38,7 @@ class AmulAutoCheckout:
         self.target_url = target_url
         self.substore_id = substore_id
         self.pincode = pincode
+        self.substore_alias = substore_alias
         self.headless = headless
         self.quantity = quantity
         self.gateway = (gateway or "easebuzz").strip().lower()
@@ -45,6 +47,19 @@ class AmulAutoCheckout:
         self.cancel_event = cancel_event
         self.screenshots_dir = "screenshots"
         os.makedirs(self.screenshots_dir, exist_ok=True)
+
+        # Auto-resolve missing substore ID or alias from pincode if available
+        if (not self.substore_id or not self.substore_alias) and self.pincode:
+            try:
+                from pincode_resolver import resolver
+                res = resolver.resolve(self.pincode)
+                if res:
+                    if not self.substore_id:
+                        self.substore_id = res.get("substore_id")
+                    if not self.substore_alias:
+                        self.substore_alias = res.get("substore_alias")
+            except Exception as e:
+                logger.debug(f"Pincode auto-resolution note: {e}")
 
     def _prepare_cookies(self, raw_cookies: list) -> list:
         """
@@ -100,20 +115,33 @@ class AmulAutoCheckout:
         try:
             logger.info("Navigating to cart page to clear items...")
             await page.goto(f"{BASE_DOMAIN}/en/cart", wait_until="domcontentloaded", timeout=20000)
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(2000)
             await self._safe_dismiss_location_modal(page)
 
+            # 1. Programmatic cart clearing via StoreHippo API
+            try:
+                await page.evaluate("""() => {
+                    if (window.ms && window.ms.cart) {
+                        if (typeof window.ms.cart.emptyCart === 'function') window.ms.cart.emptyCart();
+                        else if (typeof window.ms.cart.empty_cart === 'function') window.ms.cart.empty_cart();
+                    }
+                }""")
+                await page.wait_for_timeout(1500)
+            except Exception as e:
+                logger.debug(f"Programmatic cart empty note: {e}")
+
+            # 2. UI button fallback
             remove_btns = page.locator("text=Remove")
             count = await remove_btns.count()
             while count > 0:
                 logger.info(f"Clicking remove button ({count} items remaining)...")
                 try:
                     await remove_btns.first.click()
-                    await page.wait_for_timeout(2500)
+                    await page.wait_for_timeout(2000)
                     confirm = page.locator('button:has-text("Yes"), button:has-text("Confirm"), .modal-footer button')
                     if await confirm.count() > 0 and await confirm.first.is_visible():
                         await confirm.first.click()
-                        await page.wait_for_timeout(2000)
+                        await page.wait_for_timeout(1500)
                 except Exception as e:
                     logger.warning(f"Error clicking remove button: {e}")
                     break
@@ -220,12 +248,77 @@ class AmulAutoCheckout:
                     await browser.close()
                     return False, None, "Checkout cancelled by user via Telegram command."
 
+                # 0. Initialize Regional Substore & Pincode Session
+                # StoreHippo SPA requires substore preferences and localStorage to be initialized
+                # before navigating to regional products, otherwise it renders a 404 error page.
+                logger.info(f"Navigating to Amul home to initialize session preferences (Substore: {self.substore_id}, Pincode: {self.pincode})...")
+                await page.goto(f"{BASE_DOMAIN}/en/", wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(2000)
+
+                if self.pincode or self.substore_id:
+                    await page.evaluate("""(pref) => {
+                        if (pref.pincode) {
+                            localStorage.setItem('pincode', pref.pincode);
+                        }
+                        if (pref.substore_alias) {
+                            localStorage.setItem('substore', pref.substore_alias);
+                        }
+                    }""", {
+                        "pincode": self.pincode,
+                        "substore_alias": self.substore_alias
+                    })
+
+                    if self.substore_id:
+                        logger.info(f"Injecting substore preference: {self.substore_id} ({self.substore_alias or 'regional'})...")
+                        pref_res = await page.evaluate("""async (pref) => {
+                            if (window.ms && window.ms.app && window.ms.app.call) {
+                                return new Promise((resolve) => {
+                                    const data = { substore_id: pref.substore_id };
+                                    if (pref.pincode) data.pincode = pref.pincode;
+                                    window.ms.app.call({
+                                        entity: 'ms.settings',
+                                        command: 'setPreferences',
+                                        data: data
+                                    }, function(err, res) {
+                                        resolve({ err: err, res: res });
+                                    });
+                                });
+                            }
+                            return null;
+                        }""", {
+                            "substore_id": self.substore_id,
+                            "pincode": self.pincode
+                        })
+                        logger.debug(f"Substore preference result: {pref_res}")
+
+                await self._safe_dismiss_location_modal(page)
+
                 # 1. Navigate to Product Page
                 logger.info(f"Navigating to Target Product: {self.target_url}")
                 await page.goto(self.target_url, wait_until="domcontentloaded", timeout=30000)
                 await page.wait_for_timeout(2500)
-
                 await self._safe_dismiss_location_modal(page)
+
+                # Check if 404 page appeared and recover
+                body_text = await page.inner_text("body")
+                if "Looking for something?" in body_text:
+                    logger.warning("Product page rendered StoreHippo 404 page. Re-applying preferences and reloading...")
+                    if self.substore_id:
+                        await page.evaluate("""async (pref) => {
+                            if (window.ms && window.ms.app && window.ms.app.call) {
+                                return new Promise((resolve) => {
+                                    window.ms.app.call({
+                                        entity: 'ms.settings',
+                                        command: 'setPreferences',
+                                        data: { substore_id: pref.substore_id, pincode: pref.pincode }
+                                    }, function(err, res) { resolve(res); });
+                                });
+                            }
+                        }""", {"substore_id": self.substore_id, "pincode": self.pincode})
+                    await page.reload(wait_until="domcontentloaded")
+                    await page.wait_for_timeout(2500)
+                    await self._safe_dismiss_location_modal(page)
+
                 await page.screenshot(path=os.path.join(self.screenshots_dir, "01_product_page.png"))
 
                 # 2. Add Product to Cart
@@ -259,7 +352,7 @@ class AmulAutoCheckout:
 
                 # If on cart page, click Checkout
                 if "/cart" in page.url:
-                    checkout_btn = page.locator("a[href*='checkout'], button:has-text('Place Order')")
+                    checkout_btn = page.locator("a[href*='checkout'], button:has-text('Checkout'), button:has-text('Place Order')")
                     if await checkout_btn.count() > 0:
                         await checkout_btn.first.click()
                         await page.wait_for_timeout(3000)
@@ -280,15 +373,18 @@ class AmulAutoCheckout:
                 logger.info(f"Selecting Payment Gateway: {self.gateway.upper()}...")
                 await self._select_gateway(page)
 
-                pay_now_btn = page.locator('button:has-text("Pay Now")')
-                if await pay_now_btn.count() == 0:
-                    error_msg = "'Pay Now' button not found on checkout."
-                    logger.error(error_msg)
-                    await browser.close()
-                    return False, None, error_msg
-
-                logger.info("Clicking 'Pay Now' to launch payment gateway...")
-                await pay_now_btn.first.click()
+                pay_now_btn = page.locator('button:has-text("Pay Now"), button:has-text("Confirm"), button[type="submit"]:has-text("Pay")')
+                if await pay_now_btn.count() > 0 and await pay_now_btn.first.is_visible():
+                    logger.info("Clicking 'Pay Now' to launch payment gateway...")
+                    await pay_now_btn.first.click()
+                else:
+                    logger.info("Triggering placeOrder programmatically...")
+                    await page.evaluate("""() => {
+                        if (window.ms && window.ms.cart && window.ms.cart.placeOrder) {
+                            if (window.ms.trigger) window.ms.trigger('ms.pay_now_clicked');
+                            window.ms.cart.placeOrder();
+                        }
+                    }""")
 
                 # 6. Gateway Processing & UPI Dispatch
                 if "phonepe" in self.gateway:
@@ -317,6 +413,7 @@ class AmulAutoCheckout:
 
     async def _add_item_to_cart(self, page: Page) -> bool:
         """Adds product to cart via UI button or client API."""
+        # 1. UI Button click
         add_selectors = [
             "button:has-text('Add to Cart')",
             "button:has-text('ADD')",
@@ -327,11 +424,24 @@ class AmulAutoCheckout:
         for sel in add_selectors:
             btn = page.locator(sel)
             if await btn.count() > 0 and await btn.first.is_visible():
-                if not await btn.first.is_disabled():
-                    await btn.first.click()
-                    return True
+                is_disabled = await btn.first.evaluate("""(el) => {
+                    return el.disabled === true ||
+                           el.getAttribute('disabled') === 'true' ||
+                           el.getAttribute('disabled') === '' ||
+                           el.classList.contains('disabled') ||
+                           el.getAttribute('aria-disabled') === 'true';
+                }""")
+                if not is_disabled:
+                    logger.info(f"Clicking Add to Cart button ({sel})...")
+                    try:
+                        await btn.first.click(timeout=5000)
+                        await page.wait_for_timeout(2000)
+                        return True
+                    except Exception as e:
+                        logger.warning(f"Error clicking Add button ({sel}): {e}")
 
-        # Fallback to ms.cart.addItem
+        # 2. StoreHippo API fallback via window.ms.cart.addItem
+        logger.info("Attempting programmatic cart addition via window.ms.cart.addItem...")
         try:
             added = await page.evaluate(f"""async (qty) => {{
                 if (window.ms && window.ms.cart && window.ms.product && window.ms.product._id) {{
@@ -344,6 +454,8 @@ class AmulAutoCheckout:
                 return false;
             }}""", self.quantity)
             if added:
+                logger.info("Product added to cart via window.ms.cart.addItem.")
+                await page.wait_for_timeout(2000)
                 return True
         except Exception as e:
             logger.debug(f"Cart addItem evaluate fallback note: {e}")
@@ -354,14 +466,57 @@ class AmulAutoCheckout:
         """Ensures a delivery address is selected."""
         await self._safe_dismiss_location_modal(page)
 
-        # Check existing radio buttons
+        # 1. Re-assert pincode in localStorage so StoreHippo renders matching addresses
+        if self.pincode:
+            await page.evaluate("""(pin) => {
+                localStorage.setItem('pincode', pin);
+            }""", self.pincode)
+
+        # 2. Primary Amul address button: 'Use this address'
+        use_addr_btn = page.locator('text="Use this address", button:has-text("Use this address"), span:has-text("Use this address")')
+        if await use_addr_btn.count() > 0 and await use_addr_btn.first.is_visible():
+            logger.info("Clicking 'Use this address' button...")
+            await use_addr_btn.first.click()
+            await page.wait_for_timeout(1500)
+            return
+
+        # 3. Radio button / address card selection
         address_radios = page.locator("input[type='radio'][name*='address'], .address-card, .address-item")
-        if await address_radios.count() > 0:
-            logger.info("Selecting saved delivery address...")
+        if await address_radios.count() > 0 and await address_radios.first.is_visible():
+            logger.info("Selecting saved delivery address radio...")
             await address_radios.first.click()
             await page.wait_for_timeout(1000)
 
-        # Click Next/Continue if present
+        # 4. Programmatic StoreHippo address update fallback
+        logger.info("Executing ms.cart.updateAddresses programmatic selection...")
+        try:
+            addr_updated = await page.evaluate("""(targetPin) => {
+                return new Promise((resolve) => {
+                    if (window.ms && window.ms.cart && window.ms.user && window.ms.user.addresses && window.ms.user.addresses.length > 0) {
+                        const addrs = window.ms.user.addresses;
+                        let selected = null;
+                        if (targetPin) {
+                            selected = addrs.find(a => String(a.zip).trim() === String(targetPin).trim());
+                        }
+                        if (!selected) {
+                            selected = addrs[0];
+                        }
+                        window.ms.cart.updateAddresses({ shipping_address: selected, billing_address: selected }, function(err) {
+                            if (window.ms.temp) window.ms.temp.step = 3;
+                            resolve(!err);
+                        });
+                    } else {
+                        resolve(false);
+                    }
+                });
+            }""", self.pincode)
+            if addr_updated:
+                logger.info("Address successfully updated via ms.cart.updateAddresses.")
+                await page.wait_for_timeout(1500)
+        except Exception as e:
+            logger.debug(f"Address update fallback note: {e}")
+
+        # 5. Click Next/Continue if present
         continue_btn = page.locator('button:has-text("Deliver Here"), button:has-text("Continue"), button:has-text("Next")')
         if await continue_btn.count() > 0 and await continue_btn.first.is_visible():
             await continue_btn.first.click()
@@ -372,8 +527,9 @@ class AmulAutoCheckout:
         await self._safe_dismiss_location_modal(page)
         await page.wait_for_timeout(1000)
 
+        # 1. UI Selection
         if "phonepe" in self.gateway:
-            phonepe_radio = page.locator('label:has-text("PhonePe"), input[id="66e9234df236dc0024a19d19"]')
+            phonepe_radio = page.locator('label:has-text("PhonePe"), input[id="66e9234df236dc0024a19d19"], label:has-text("UPI")')
             if await phonepe_radio.count() > 0:
                 await phonepe_radio.first.click()
                 await page.wait_for_timeout(1000)
@@ -388,6 +544,22 @@ class AmulAutoCheckout:
             if await eb_radio.count() > 0:
                 await eb_radio.first.click()
                 await page.wait_for_timeout(1000)
+
+        # 2. StoreHippo API fallback: updatePaymentMethod
+        try:
+            await page.evaluate("""(gw) => {
+                if (window.ms && window.ms.cart && window.ms.cart.available_payment_methods) {
+                    const methods = window.ms.cart.available_payment_methods;
+                    let matched = methods.find(m => m.name && m.name.toLowerCase().includes(gw));
+                    if (!matched && methods.length > 0) matched = methods[0];
+                    if (matched) {
+                        window.ms.cart.updatePaymentMethod(matched);
+                    }
+                }
+            }""", self.gateway)
+            await page.wait_for_timeout(1000)
+        except Exception as e:
+            logger.debug(f"Payment method selection note: {e}")
 
     async def _handle_easebuzz_flow(self, page: Page) -> Tuple[bool, Optional[str], Optional[str]]:
         """
@@ -419,14 +591,14 @@ class AmulAutoCheckout:
         await page.wait_for_timeout(3000)
 
         # Click UPI tab inside Easebuzz
-        upi_opt = easebuzz_frame.locator('text="UPI"')
+        upi_opt = easebuzz_frame.locator('text="UPI", button:has-text("UPI"), [data-testid*="upi"]')
         if await upi_opt.count() > 0:
             logger.info("Selecting UPI option inside Easebuzz...")
             await upi_opt.first.click()
             await page.wait_for_timeout(2000)
 
         # Click 'Show QR' button
-        show_qr = easebuzz_frame.locator('button:has-text("Show QR")')
+        show_qr = easebuzz_frame.locator('button:has-text("Show QR"), button:has-text("Generate QR"), text="Show QR", text="Generate QR"')
         if await show_qr.count() > 0:
             logger.info("Clicking 'Show QR' button inside Easebuzz...")
             await show_qr.first.click()

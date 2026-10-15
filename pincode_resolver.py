@@ -20,34 +20,49 @@ CACHE_FILE = "pincode_cache.json"
 STORE_ID = "62fa94df8c13af2e242eba16"
 BASE_URL = "https://shop.amul.com"
 
-# Built-in All-India Regional Warehouse Catalog
+# Built-in All-India Regional Warehouse Catalog (Synced with Amul StoreHippo API)
 DEFAULT_SUBSTORE_CATALOG = {
-    "up-ncr": {"id": "66505ff8c8f2d6e221b9180c", "name": "UP NCR"},
-    "delhi": {"id": "66505ff5145c16635e6cc74d", "name": "Delhi"},
-    "karnataka": {"id": "66505ff0998183e1b1935c75", "name": "Karnataka / Bangalore"},
-    "mumbai-br": {"id": "66506000c8f2d6e221b9193a", "name": "Mumbai BR"},
-    "pune-br": {"id": "66506004a7cddee1b8adb014", "name": "Pune BR"},
-    "solapur-br": {"id": "66506004145c16635e6cc914", "name": "Solapur BR"},
-    "nashik-br": {"id": "66506002c8f2d6e221b91988", "name": "Nashik BR"},
-    "aurangabad-br": {"id": "66506002aa64743ceefbed25", "name": "Aurangabad BR"},
-    "telangana": {"id": "66506004aa64743ceefbed25", "name": "Telangana / Hyderabad"},
-    "andhra-pradesh": {"id": "66505ff26510ee3d5903fda9", "name": "Andhra Pradesh"},
-    "tamil-nadu": {"id": "66505ff3998183e1b1935d0e", "name": "Tamil Nadu / Chennai"},
-    "kerala": {"id": "66505ff1672747740fb388ec", "name": "Kerala / Kochi"},
-    "west-bengal": {"id": "6650600024e61363e088c526", "name": "West Bengal / Kolkata"},
-    "gujarat": {"id": "66505ff2998183e1b1935ccd", "name": "Gujarat / Ahmedabad"},
-    "rajasthan": {"id": "66505ff824e61363e088c3dd", "name": "Rajasthan / Jaipur"},
-    "punjab": {"id": "66505ff9af6a3c7411d2f55f", "name": "Punjab / Chandigarh"},
-    "haryana": {"id": "66505ff5af6a3c7411d2f4b2", "name": "Haryana / Gurugram"},
-    "uttrakhand": {"id": "66505ff8a7cddee1b8adae9d", "name": "Uttarakhand"},
-    "madhya-pradesh": {"id": "66505ff6d9346de216752cd7", "name": "Madhya Pradesh"},
+    "andhra-pradesh": {"id": "66505ff378117873bb53b542", "name": "Andhra Pradesh"},
+    "arunachal-pradesh": {"id": "66505ff978117873bb53b643", "name": "Arunachal Pradesh"},
+    "assam": {"id": "66505ffb6510ee3d5903fef8", "name": "Assam"},
+    "aurangabad-br": {"id": "66506002aa64743ceefbecf1", "name": "Aurangabad BR"},
+    "bihar": {"id": "66505ff9af6a3c7411d2f55f", "name": "Bihar"},
+    "chandigarh": {"id": "66505ff1672747740fb388ec", "name": "Chandigarh"},
     "chhattisgarh": {"id": "66506002998183e1b1935f41", "name": "Chhattisgarh"},
-    "bihar": {"id": "66505ffb6510ee3d5903fef8", "name": "Bihar / Patna"},
-    "jharkhand": {"id": "66505ffbf40e263cf5588098", "name": "Jharkhand / Ranchi"},
-    "odisha": {"id": "66505ffd672747740fb389c7", "name": "Odisha / Bhubaneswar"},
-    "assam": {"id": "66505ffd998183e1b1935e21", "name": "Assam / Guwahati"},
-    "goa": {"id": "66506005147d6c73c1110115", "name": "Goa"},
     "dadra-and-nagar-haveli": {"id": "6650600062e3d963520d0bc3", "name": "Dadra & Nagar Haveli"},
+    "daman-and-diu": {"id": "66505ff024e61363e088c306", "name": "Daman & DIU"},
+    "delhi": {"id": "66505ff5145c16635e6cc74d", "name": "Delhi"},
+    "goa": {"id": "66506005147d6c73c1110115", "name": "Goa"},
+    "gujarat": {"id": "66505ff06510ee3d5903fd42", "name": "Gujarat"},
+    "haryana": {"id": "66505ff5af6a3c7411d2f4b2", "name": "Haryana"},
+    "himachal-pradesh": {"id": "66505ff26510ee3d5903fda9", "name": "Himachal Pradesh"},
+    "jandk": {"id": "66505ff6f40e263cf5587fb5", "name": "J&K"},
+    "jharkhand": {"id": "66505ffb998183e1b1935dee", "name": "Jharkhand"},
+    "karnataka": {"id": "66505ff0998183e1b1935c75", "name": "Karnataka"},
+    "kerala": {"id": "66505ff2998183e1b1935ccd", "name": "Kerala"},
+    "ladakh": {"id": "66505ff6145c16635e6cc7c1", "name": "Ladakh"},
+    "madhya-pradesh": {"id": "66505ff6d9346de216752cd7", "name": "Madhya Pradesh"},
+    "manipur": {"id": "66505ffbf40e263cf5588098", "name": "Manipur"},
+    "meghalaya": {"id": "66505ffd672747740fb389c7", "name": "Meghalaya"},
+    "mizoram": {"id": "66505ffd998183e1b1935e21", "name": "Mizoram"},
+    "mumbai-br": {"id": "66506000c8f2d6e221b9193a", "name": "Mumbai BR"},
+    "nagaland": {"id": "66505ffd24e61363e088c4a5", "name": "Nagaland"},
+    "nashik-br": {"id": "66506002c8f2d6e221b91988", "name": "Nashik BR"},
+    "odisha": {"id": "66505ffeaf6a3c7411d2f62c", "name": "Odisha"},
+    "pondicherry": {"id": "66505ff312a50963f24870e8", "name": "Pondicherry"},
+    "pune-br": {"id": "66506004a7cddee1b8adb014", "name": "Pune BR"},
+    "punjab": {"id": "66505ff3998183e1b1935d0e", "name": "Punjab"},
+    "rajasthan": {"id": "66505ff824e61363e088c3dd", "name": "Rajasthan"},
+    "sikkim": {"id": "66505ffe91ab653d60a3df2d", "name": "Sikkim"},
+    "solapur-br": {"id": "66506004145c16635e6cc914", "name": "Solapur BR"},
+    "tamil-nadu-1": {"id": "66505ff578117873bb53b56a", "name": "Tamil Nadu"},
+    "tamil-nadu": {"id": "66505ff578117873bb53b56a", "name": "Tamil Nadu"},
+    "telangana": {"id": "66506004aa64743ceefbed25", "name": "Telangana"},
+    "tripura": {"id": "66505ffe78117873bb53b6ad", "name": "Tripura"},
+    "up-ncr": {"id": "66505ff8c8f2d6e221b9180c", "name": "UP NCR"},
+    "uttar-pradesh-e": {"id": "66505ff924e61363e088c414", "name": "Uttar Pradesh E"},
+    "uttrakhand": {"id": "66505ff8a7cddee1b8adae9d", "name": "Uttarakhand"},
+    "west-bengal": {"id": "6650600024e61363e088c526", "name": "West Bengal"},
 }
 
 class PincodeResolver:
@@ -90,6 +105,20 @@ class PincodeResolver:
         tid_hash = hashlib.sha256(raw_signature.encode("utf-8")).hexdigest()
         return f"{timestamp}:{random_num}:{tid_hash}"
 
+    def _fetch_substore_by_alias(self, alias: str) -> Optional[Dict[str, str]]:
+        """Dynamically fetches real substore _id and name from StoreHippo entity API."""
+        url = f"{BASE_URL}/api/1/entity/ms.substores?filters[0][field]=alias&filters[0][value]={alias}&limit=1"
+        try:
+            resp = self.session.get(url, headers={"tid": self._generate_tid()}, timeout=8)
+            if resp.status_code == 200:
+                data = resp.json().get("data", [])
+                if data:
+                    item = data[0]
+                    return {"id": item["_id"], "name": item.get("name", alias.upper())}
+        except Exception as e:
+            logger.error(f"Error dynamically fetching substore for alias {alias}: {e}")
+        return None
+
     def resolve(self, pincode: str) -> Optional[Dict[str, str]]:
         """
         Resolves an Indian pincode to its Amul regional warehouse substore details.
@@ -108,8 +137,16 @@ class PincodeResolver:
 
         # 1. Check local cache
         if pincode in self.cache:
-            logger.info(f"Pincode {pincode} resolved from local cache: {self.cache[pincode]['warehouse_name']}")
-            return self.cache[pincode]
+            cached = self.cache[pincode]
+            # Ensure cached substore ID matches our authoritative catalog
+            alias = cached.get("substore_alias", "").lower()
+            if alias in self.catalog and self.catalog[alias]["id"] != cached.get("substore_id"):
+                cached["substore_id"] = self.catalog[alias]["id"]
+                cached["warehouse_name"] = self.catalog[alias]["name"]
+                self.cache[pincode] = cached
+                self._save_cache()
+            logger.info(f"Pincode {pincode} resolved from local cache: {cached['warehouse_name']}")
+            return cached
 
         # 2. Query Amul API
         url = (
@@ -128,9 +165,18 @@ class PincodeResolver:
                 if records:
                     alias = records[0].get("substore", "").strip().lower()
                     warehouse_info = self.catalog.get(alias)
-                    
-                    substore_id = warehouse_info["id"] if warehouse_info else records[0].get("_id")
-                    warehouse_name = warehouse_info["name"] if warehouse_info else alias.upper()
+                    if not warehouse_info:
+                        dynamic_info = self._fetch_substore_by_alias(alias)
+                        if dynamic_info:
+                            warehouse_info = dynamic_info
+                            self.catalog[alias] = dynamic_info
+
+                    if not warehouse_info:
+                        logger.error(f"Unable to resolve valid substore ID for alias '{alias}' on pincode {pincode}.")
+                        return None
+
+                    substore_id = warehouse_info["id"]
+                    warehouse_name = warehouse_info["name"]
 
                     result = {
                         "pincode": pincode,
