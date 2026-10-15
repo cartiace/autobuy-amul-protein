@@ -12,3 +12,5 @@ venv/
 *.sqlite3
 pincode_cache.json
 scratch/
+test_*.py
+tests/
