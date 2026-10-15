@@ -66,33 +66,47 @@ class MultiUserTelegramBot:
         if is_active:
             keyboard = [
                 [
-                    InlineKeyboardButton("⏸️ Pause 1 Mo", callback_data="pause_30"),
-                    InlineKeyboardButton("⏸️ Pause 2 Mos", callback_data="pause_60"),
-                    InlineKeyboardButton("⏸️ Pause 3 Mos", callback_data="pause_90"),
+                    InlineKeyboardButton("⏸️ 1 Mo", callback_data="pause_30"),
+                    InlineKeyboardButton("⏸️ 2 Mos", callback_data="pause_60"),
+                    InlineKeyboardButton("⏸️ 3 Mos", callback_data="pause_90"),
                 ],
                 [
+                    InlineKeyboardButton("🔔 Switch to Alerts Only", callback_data="switch_notify_only"),
                     InlineKeyboardButton("📦 Change Product", callback_data="change_product"),
-                    InlineKeyboardButton("📊 My Status", callback_data="status"),
                 ],
                 [
-                    InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
-                    InlineKeyboardButton("🛑 Stop & Delete", callback_data="confirm_delete"),
-                ]
-            ]
-        else:
-            keyboard = [
-                [
-                    InlineKeyboardButton("▶️ Resume Auto-Buy", callback_data="resume"),
                     InlineKeyboardButton("📊 My Status", callback_data="status"),
-                ],
-                [
-                    InlineKeyboardButton("📦 Change Product", callback_data="change_product"),
                     InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
                 ],
                 [
                     InlineKeyboardButton("🛑 Stop & Delete Account", callback_data="confirm_delete"),
                 ]
             ]
+        else:
+            keyboard = [
+                [
+                    InlineKeyboardButton("⚡ Enable Auto-Buy", callback_data="resume"),
+                    InlineKeyboardButton("📦 Change Product", callback_data="change_product"),
+                ],
+                [
+                    InlineKeyboardButton("📊 My Status", callback_data="status"),
+                    InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
+                ],
+                [
+                    InlineKeyboardButton("🛑 Stop & Delete Account", callback_data="confirm_delete"),
+                ]
+            ]
+        return InlineKeyboardMarkup(keyboard)
+
+    def _get_mode_selection_keyboard(self) -> InlineKeyboardMarkup:
+        keyboard = [
+            [
+                InlineKeyboardButton("⚡ Auto-Buy (Instant Checkout + UPI QR)", callback_data="onboard_mode_autobuy")
+            ],
+            [
+                InlineKeyboardButton("🔔 Stock Alerts Only (No Login Required)", callback_data="onboard_mode_notify")
+            ]
+        ]
         return InlineKeyboardMarkup(keyboard)
 
     def _get_delete_confirm_keyboard(self) -> InlineKeyboardMarkup:
@@ -113,17 +127,18 @@ class MultiUserTelegramBot:
 
         if user.onboarding_state == "READY":
             is_active, _, reason = user.is_auto_buy_active()
-            mode_str = "🟢 <b>ACTIVE</b>" if is_active else f"⏸️ <b>PAUSED</b> ({reason})"
-            phone_str = f"+91 {user.phone_number}" if user.phone_number else "Linked"
+            mode_str = "🟢 <b>AUTO-BUY ACTIVE</b>" if is_active else f"🔔 <b>STOCK ALERTS ONLY</b> (<i>{reason}</i>)"
+            phone_str = f"+91 {user.phone_number}" if user.phone_number else "Not Linked (Alerts Only)"
             target_str = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
             msg = (
                 f"👋 <b>Welcome back, {username}!</b>\n\n"
                 f"📍 <b>Delivery Pincode:</b> <code>{user.pincode}</code> ({user.substore_name})\n"
                 f"📱 <b>Amul Account:</b> {phone_str}\n"
                 f"📦 <b>Target Product:</b> {target_str}\n"
-                f"🛒 <b>Auto-Buy Status:</b> {mode_str}\n\n"
+                f"🎯 <b>Monitoring Mode:</b> {mode_str}\n\n"
                 f"<b>Quick Actions:</b>\n"
                 f"• <code>/product</code> - Choose or change target product\n"
+                f"• <code>/mode</code> - Switch between Auto-Buy and Alerts-Only\n"
                 f"• <code>/status</code> - View monitoring details\n"
                 f"• <code>/pause [duration]</code> - Snooze purchases (e.g. <code>/pause 2m</code>)\n"
                 f"• <code>/resume</code> - Resume auto-buy anytime\n"
@@ -141,11 +156,9 @@ class MultiUserTelegramBot:
             database.set_user_onboarding_state(chat_id, "AWAITING_PINCODE")
             msg = (
                 f"👋 <b>Welcome to Amul Stock Monitor & Auto-Buy!</b>\n\n"
-                f"I monitor 24/7 for <b>Amul Store</b> restocks (Whey Protein, Buttermilk, Paneer, or any custom item) "
-                f"and automatically checkout as soon as your regional warehouse gets inventory.\n\n"
-                f"⚠️ <b>Before you begin, please ensure:</b>\n"
-                f"1. You already have an active account on <a href='https://shop.amul.com'>shop.amul.com</a>\n"
-                f"2. Your <b>delivery address is already saved</b> in your Amul account profile\n\n"
+                f"I monitor 24/7 for <b>Amul Store</b> restocks and can either:\n"
+                f"• ⚡ <b>Auto-Buy:</b> Automatically checkout and send your UPI payment QR code\n"
+                f"• 🔔 <b>Stock Alerts:</b> Send instant notifications without placing orders\n\n"
                 f"👉 <b>Step 1 of 2: Delivery Location</b>\n"
                 f"Please reply with your <b>6-digit delivery Pincode</b> (e.g. <code>201310</code> or <code>110001</code>):"
             )
@@ -155,11 +168,13 @@ class MultiUserTelegramBot:
         msg = (
             "📖 <b>Amul Auto-Buy Commands & Guide</b>\n\n"
             "• <code>/product</code> - Choose your target product or paste any custom Amul link\n"
+            "• <code>/mode</code> - Switch between Auto-Buy and Stock Alerts Only\n"
             "• <code>/status</code> - View your current warehouse, pincode, and target product\n"
             "• <code>/pause 1m</code> - Timeout auto-purchase for 1 month (30 days)\n"
             "• <code>/pause 2m</code> - Timeout auto-purchase for 2 months (60 days)\n"
             "• <code>/pause 3m</code> - Timeout auto-purchase for 3 months (90 days)\n"
             "• <code>/resume</code> - Resume auto-purchases immediately\n"
+            "• <code>/notify</code> - Switch to Stock Alerts Only (Notify-Only)\n"
             "• <code>/pincode 110001</code> - Update your delivery pincode\n"
             "• <code>/cancel</code> - Cancel any ongoing purchase or UPI QR payment\n"
             "• <code>/relogin</code> - Re-authenticate your Amul account with SMS OTP\n"
@@ -190,6 +205,39 @@ class MultiUserTelegramBot:
             reply_markup=get_product_selection_keyboard(user.target_alias)
         )
 
+    async def cmd_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        user = database.get_user(chat_id)
+        if not user or user.onboarding_state not in ("READY", "CHOOSE_MODE"):
+            await update.message.reply_text("⚠️ Setup not complete. Send /start to begin onboarding.")
+            return
+
+        is_active, _, reason = user.is_auto_buy_active()
+        curr_mode = "⚡ <b>Auto-Buy Active</b>" if is_active else f"🔔 <b>Stock Alerts Only</b> (<i>{reason}</i>)"
+        msg = (
+            f"🎯 <b>Choose Monitoring Mode</b>\n\n"
+            f"Current Mode: {curr_mode}\n\n"
+            f"• ⚡ <b>Auto-Buy:</b> Checks out automatically and sends your UPI payment QR.\n"
+            f"• 🔔 <b>Stock Alerts Only:</b> Sends instant alerts when in stock; zero login needed.\n\n"
+            f"Select your preferred mode below:"
+        )
+        await update.message.reply_text(
+            msg,
+            parse_mode="HTML",
+            reply_markup=self._get_mode_selection_keyboard()
+        )
+
+    async def cmd_notify_only(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        database.pause_user_autobuy(chat_id, days=None, reason="Notify-Only Mode")
+        database.mark_user_stock_notified(chat_id, False)
+        msg = (
+            "🔔 <b>Switched to Stock Alerts Only (Notify-Only Mode)!</b>\n\n"
+            "The bot will monitor 24/7 and alert you when stock arrives, but will not checkout automatically.\n\n"
+            "You can enable Auto-Buy anytime by tapping ⚡ Enable Auto-Buy or typing <code>/resume</code>."
+        )
+        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=self._get_user_keyboard(False))
+
     async def cmd_relogin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         database.set_user_onboarding_state(chat_id, "AWAITING_PHONE")
@@ -207,13 +255,13 @@ class MultiUserTelegramBot:
             return
 
         is_active, paused_until, reason = user.is_auto_buy_active()
-        mode_str = "🟢 <b>ACTIVE (Auto-buy enabled)</b>" if is_active else f"⏸️ <b>PAUSED (Notify-Only Mode)</b>\n<i>{reason}</i>"
-        phone_str = f"+91 {user.phone_number}" if user.phone_number else "Linked"
+        mode_str = "🟢 <b>AUTO-BUY ACTIVE</b>" if is_active else f"🔔 <b>STOCK ALERTS ONLY</b>\n<i>{reason}</i>"
+        phone_str = f"+91 {user.phone_number}" if user.phone_number else "Not Linked (Alerts Only)"
         target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
 
         msg = (
             f"📊 <b>Your Personal Status Report</b>\n\n"
-            f"🛒 <b>Auto-Buy Mode:</b> {mode_str}\n"
+            f"🎯 <b>Monitoring Mode:</b> {mode_str}\n"
             f"📍 <b>Delivery Pincode:</b> <code>{user.pincode}</code>\n"
             f"🏪 <b>Warehouse:</b> <b>{user.substore_name}</b>\n"
             f"📱 <b>Amul Account:</b> {phone_str}\n"
@@ -282,6 +330,22 @@ class MultiUserTelegramBot:
 
     async def cmd_resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
+        user = database.get_user(chat_id)
+        if not user or user.onboarding_state not in ("READY", "CHOOSE_MODE"):
+            await update.message.reply_text("⚠️ Setup not complete. Send /start to begin onboarding.")
+            return
+
+        cookies = database.get_user_cookies(chat_id)
+        if not cookies:
+            database.set_user_onboarding_state(chat_id, "AWAITING_PHONE")
+            await update.message.reply_text(
+                "⚡ <b>Enable Auto-Buy: Amul Account Required</b>\n\n"
+                "To automatically place orders and generate UPI QR codes, your Amul account needs to be linked.\n\n"
+                "Please reply with your <b>10-digit registered Amul Mobile Number</b> (e.g. <code>9876543210</code>) to verify via SMS OTP:",
+                parse_mode="HTML"
+            )
+            return
+
         database.resume_user_autobuy(chat_id)
         database.mark_user_stock_notified(chat_id, False)
         msg = (
@@ -309,7 +373,7 @@ class MultiUserTelegramBot:
                 await update.message.reply_text(f"❌ Pincode {pincode} is not currently serviceable by Amul.")
                 return
 
-        database.set_user_onboarding_state(chat_id, "AWAITING_PINCODE")
+        database.set_user_onboarding_state(chat_id, "AWAITING_PINCODE_UPDATE")
         await update.message.reply_text("📍 Please send your new <b>6-digit delivery pincode</b>:", parse_mode="HTML")
 
     async def cmd_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -368,17 +432,34 @@ class MultiUserTelegramBot:
                 return
 
             total = len(users)
-            active_count = sum(1 for u in users if u.is_auto_buy_active()[0])
-            paused_count = total - active_count
+            autobuy_count = 0
+            notify_count = 0
+            paused_count = 0
+            for u in users:
+                is_act, _, reason = u.is_auto_buy_active()
+                if is_act:
+                    autobuy_count += 1
+                elif "notify" in (reason or "").lower():
+                    notify_count += 1
+                else:
+                    paused_count += 1
 
             lines = [
                 f"👑 <b>Admin Dashboard: User Directory</b>",
-                f"👥 <b>Total Active Users:</b> {total} | 🟢 <b>Active:</b> {active_count} | ⏸️ <b>Paused:</b> {paused_count}\n"
+                f"👥 <b>Total Users:</b> {total} | 🟢 <b>Auto-Buy:</b> {autobuy_count} | 🔔 <b>Notify-Only:</b> {notify_count} | ⏸️ <b>Paused:</b> {paused_count}\n"
             ]
 
             for i, u in enumerate(users, 1):
                 is_act, _, reason = u.is_auto_buy_active()
-                stat_emoji = "🟢" if is_act else "⏸️"
+                if is_act:
+                    stat_emoji = "🟢"
+                    mode_label = "Auto-Buy"
+                elif "notify" in (reason or "").lower():
+                    stat_emoji = "🔔"
+                    mode_label = "Notify-Only"
+                else:
+                    stat_emoji = "⏸️"
+                    mode_label = f"Paused ({reason})"
                 user_tag = f"@{u.telegram_username}" if u.telegram_username else f"User {u.telegram_chat_id}"
                 phone_str = f"+91 {u.phone_number}" if u.phone_number else "No Phone"
                 pincode_str = u.pincode or "N/A"
@@ -387,7 +468,7 @@ class MultiUserTelegramBot:
                 lines.append(
                     f"{i}. {stat_emoji} <b>{user_tag}</b> (<code>{u.telegram_chat_id}</code>)\n"
                     f"   📱 {phone_str} | 📍 <code>{pincode_str}</code>\n"
-                    f"   🏬 {warehouse_str} | State: <i>{u.onboarding_state}</i>\n"
+                    f"   🏬 {warehouse_str} | Mode: <b>{mode_label}</b> | State: <i>{u.onboarding_state}</i>\n"
                 )
 
             if deleted_logs:
@@ -414,23 +495,27 @@ class MultiUserTelegramBot:
         if not user:
             user = database.get_or_create_user(chat_id, update.effective_user.username)
 
-        # State 1: Awaiting Pincode
+        # State 1: Awaiting Pincode (New User Onboarding)
         if user.onboarding_state == "AWAITING_PINCODE":
             if text.isdigit() and len(text) == 6:
                 await update.message.reply_text("🔍 <i>Verifying pincode with Amul network...</i>", parse_mode="HTML")
                 res = resolver.resolve(text)
                 if res:
                     database.update_user_pincode(chat_id, text, res["substore_id"], res["warehouse_name"])
-                    database.set_user_onboarding_state(chat_id, "AWAITING_PHONE")
+                    database.set_user_onboarding_state(chat_id, "CHOOSE_MODE")
                     msg = (
                         f"✅ <b>Pincode {text} Verified!</b>\n"
                         f"📍 <b>Regional Warehouse:</b> {res['warehouse_name']}\n\n"
-                        f"👉 <b>Step 2 of 2: Login to Amul</b>\n"
-                        f"Please reply with your <b>10-digit registered Amul Mobile Number</b> (e.g. <code>9876543210</code>):\n\n"
-                        f"<i>(Make sure your delivery address is saved in this Amul account)</i>\n"
-                        f"Amul will send you an official SMS OTP to verify."
+                        f"👉 <b>Step 2 of 2: Choose Monitoring Mode</b>\n\n"
+                        f"• ⚡ <b>Auto-Buy:</b> Automatically checks out & delivers your UPI payment QR code as soon as stock drops. Requires a 1-time Amul SMS OTP login.\n\n"
+                        f"• 🔔 <b>Stock Alerts Only:</b> Instant restock notifications with direct 1-tap links. Zero login or Amul credentials required!\n\n"
+                        f"Please choose your preferred mode below:"
                     )
-                    await update.message.reply_text(msg, parse_mode="HTML")
+                    await update.message.reply_text(
+                        msg,
+                        parse_mode="HTML",
+                        reply_markup=self._get_mode_selection_keyboard()
+                    )
                 else:
                     await update.message.reply_text(
                         f"❌ Pincode <code>{text}</code> is not currently serviceable by Amul.\n"
@@ -440,6 +525,91 @@ class MultiUserTelegramBot:
             else:
                 await update.message.reply_text("⚠️ Please send a valid 6-digit numerical pincode (e.g. <code>201310</code>).", parse_mode="HTML")
             return
+
+        # State 1b: Awaiting Pincode Update for existing user
+        if user.onboarding_state == "AWAITING_PINCODE_UPDATE":
+            if text.isdigit() and len(text) == 6:
+                await update.message.reply_text("🔍 <i>Verifying pincode with Amul network...</i>", parse_mode="HTML")
+                res = resolver.resolve(text)
+                if res:
+                    database.update_user_pincode(chat_id, text, res["substore_id"], res["warehouse_name"])
+                    database.set_user_onboarding_state(chat_id, "READY")
+                    is_active, _, _ = user.is_auto_buy_active()
+                    msg = (
+                        f"✅ <b>Pincode updated to {text}!</b>\n"
+                        f"📍 <b>Regional Warehouse:</b> {res['warehouse_name']} (Substore: <code>{res['substore_id']}</code>)\n\n"
+                        f"Your monitoring target warehouse has been updated successfully."
+                    )
+                    await update.message.reply_text(
+                        msg,
+                        parse_mode="HTML",
+                        reply_markup=self._get_user_keyboard(is_active)
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ Pincode <code>{text}</code> is not currently serviceable by Amul.\n"
+                        f"Please try a different delivery pincode:",
+                        parse_mode="HTML"
+                    )
+            else:
+                await update.message.reply_text("⚠️ Please send a valid 6-digit numerical pincode (e.g. <code>201310</code>).", parse_mode="HTML")
+            return
+
+        # State 1c: Choosing Monitoring Mode (Text Fallback)
+        if user.onboarding_state == "CHOOSE_MODE":
+            lower_text = text.lower()
+            if any(k in lower_text for k in ["1", "auto", "buy", "checkout"]):
+                cookies = database.get_user_cookies(chat_id)
+                if cookies:
+                    database.resume_user_autobuy(chat_id)
+                    database.set_user_onboarding_state(chat_id, "READY")
+                    target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+                    msg = (
+                        f"⚡ <b>Auto-Buy Mode Activated!</b>\n\n"
+                        f"📍 <b>Delivery Pincode:</b> <code>{user.pincode}</code> ({user.substore_name})\n"
+                        f"📱 <b>Amul Account:</b> +91 {user.phone_number}\n"
+                        f"📦 <b>Target Product:</b> {target_name}\n"
+                        f"🛒 <b>Auto-Purchase:</b> 🟢 <b>ACTIVE</b>\n\n"
+                        f"The bot is monitoring 24/7. When stock drops, you will receive your dynamic UPI QR instantly!"
+                    )
+                    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=self._get_user_keyboard(True))
+                else:
+                    database.set_user_onboarding_state(chat_id, "AWAITING_PHONE")
+                    msg = (
+                        f"⚡ <b>Auto-Buy Mode Selected!</b>\n\n"
+                        f"📍 Delivery to: <code>{user.pincode}</code> ({user.substore_name})\n\n"
+                        f"👉 <b>Amul Account Login</b>\n"
+                        f"Please reply with your <b>10-digit registered Amul Mobile Number</b> (e.g. <code>9876543210</code>):\n\n"
+                        f"<i>(Make sure your delivery address is saved in this Amul account)</i>\n"
+                        f"Amul will send you an official SMS OTP to verify."
+                    )
+                    await update.message.reply_text(msg, parse_mode="HTML")
+                return
+            elif any(k in lower_text for k in ["2", "notify", "alert"]):
+                database.pause_user_autobuy(chat_id, days=None, reason="Notify-Only Mode")
+                database.mark_user_stock_notified(chat_id, False)
+                database.set_user_onboarding_state(chat_id, "READY")
+                target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+                msg = (
+                    f"🎉 <b>Setup Complete — Stock Alerts Only!</b>\n\n"
+                    f"📍 <b>Delivery Pincode:</b> <code>{user.pincode}</code> ({user.substore_name})\n"
+                    f"📦 <b>Target Product:</b> {target_name}\n"
+                    f"🔔 <b>Monitoring Mode:</b> 🔔 <b>STOCK ALERTS ONLY</b>\n\n"
+                    f"The bot is now monitoring your regional warehouse 24/7.\n"
+                    f"As soon as stock arrives, you will receive an instant alert with a direct 1-tap checkout link!\n\n"
+                    f"💡 <i>No login or phone number required. You can upgrade to ⚡ Auto-Buy anytime via the menu below.</i>"
+                )
+                await update.message.reply_text(msg, parse_mode="HTML", reply_markup=self._get_user_keyboard(False))
+                return
+            else:
+                await update.message.reply_text(
+                    "👉 Please choose your monitoring mode using the buttons below, or reply:\n"
+                    "• Type <b>1</b> for ⚡ <b>Auto-Buy</b>\n"
+                    "• Type <b>2</b> for 🔔 <b>Stock Alerts Only</b>",
+                    parse_mode="HTML",
+                    reply_markup=self._get_mode_selection_keyboard()
+                )
+                return
 
         # State 2: Awaiting Phone Number -> Send SMS OTP
         if user.onboarding_state == "AWAITING_PHONE":
@@ -629,7 +799,60 @@ class MultiUserTelegramBot:
         if not user:
             return
 
-        if data.startswith("pause_"):
+        if data == "onboard_mode_autobuy":
+            cookies = database.get_user_cookies(chat_id)
+            if cookies:
+                database.resume_user_autobuy(chat_id)
+                database.set_user_onboarding_state(chat_id, "READY")
+                target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+                await query.edit_message_text(
+                    f"⚡ <b>Auto-Buy Mode Activated!</b>\n\n"
+                    f"📍 <b>Delivery Pincode:</b> <code>{user.pincode}</code> ({user.substore_name})\n"
+                    f"📱 <b>Amul Account:</b> +91 {user.phone_number}\n"
+                    f"📦 <b>Target Product:</b> {target_name}\n"
+                    f"🛒 <b>Auto-Purchase:</b> 🟢 <b>ACTIVE</b>\n\n"
+                    f"The bot is monitoring 24/7. When stock drops, you will receive your dynamic UPI QR code instantly!",
+                    parse_mode="HTML",
+                    reply_markup=self._get_user_keyboard(True)
+                )
+            else:
+                database.set_user_onboarding_state(chat_id, "AWAITING_PHONE")
+                await query.edit_message_text(
+                    f"⚡ <b>Auto-Buy Mode Selected!</b>\n\n"
+                    f"📍 Delivery to: <code>{user.pincode}</code> ({user.substore_name})\n\n"
+                    f"👉 <b>Step 2 of 2: Login to Amul</b>\n"
+                    f"Please reply with your <b>10-digit registered Amul Mobile Number</b> (e.g. <code>9876543210</code>):\n\n"
+                    f"<i>(Make sure your delivery address is saved in this Amul account)</i>\n"
+                    f"Amul will send you an official SMS OTP to verify.",
+                    parse_mode="HTML"
+                )
+        elif data == "onboard_mode_notify":
+            database.pause_user_autobuy(chat_id, days=None, reason="Notify-Only Mode")
+            database.mark_user_stock_notified(chat_id, False)
+            database.set_user_onboarding_state(chat_id, "READY")
+            target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+            await query.edit_message_text(
+                f"🎉 <b>Setup Complete — Stock Alerts Only!</b>\n\n"
+                f"📍 <b>Delivery Pincode:</b> <code>{user.pincode}</code> ({user.substore_name})\n"
+                f"📦 <b>Target Product:</b> {target_name}\n"
+                f"🔔 <b>Monitoring Mode:</b> 🔔 <b>STOCK ALERTS ONLY</b>\n\n"
+                f"The bot is now monitoring your regional warehouse 24/7.\n"
+                f"As soon as stock arrives, you will receive an instant alert with a direct 1-tap checkout link!\n\n"
+                f"💡 <i>No login or phone number required. You can upgrade to ⚡ Auto-Buy anytime via the menu below.</i>",
+                parse_mode="HTML",
+                reply_markup=self._get_user_keyboard(False)
+            )
+        elif data == "switch_notify_only":
+            database.pause_user_autobuy(chat_id, days=None, reason="Notify-Only Mode")
+            database.mark_user_stock_notified(chat_id, False)
+            await query.edit_message_text(
+                "🔔 <b>Switched to Stock Alerts Only!</b>\n\n"
+                "The bot will monitor 24/7 and alert you when stock arrives, without auto-checking out.\n\n"
+                "You can re-enable Auto-Buy anytime with the button below.",
+                parse_mode="HTML",
+                reply_markup=self._get_user_keyboard(False)
+            )
+        elif data.startswith("pause_"):
             days_str = data.split("_")[1]
             days = float(days_str) if days_str != "indefinite" else None
             paused_until, reason = database.pause_user_autobuy(chat_id, days=days)
@@ -641,7 +864,17 @@ class MultiUserTelegramBot:
                 parse_mode="HTML",
                 reply_markup=self._get_user_keyboard(False)
             )
-        elif data == "resume":
+        elif data in ("resume", "buy_now"):
+            cookies = database.get_user_cookies(chat_id)
+            if not cookies:
+                database.set_user_onboarding_state(chat_id, "AWAITING_PHONE")
+                await query.edit_message_text(
+                    "⚡ <b>Enable Auto-Buy: Amul Account Required</b>\n\n"
+                    "To automatically place orders and generate UPI QR codes, your Amul account needs to be linked.\n\n"
+                    "Please reply with your <b>10-digit registered Amul Mobile Number</b> (e.g. <code>9876543210</code>) to verify via SMS OTP:",
+                    parse_mode="HTML"
+                )
+                return
             database.resume_user_autobuy(chat_id)
             database.mark_user_stock_notified(chat_id, False)
             await query.edit_message_text(
@@ -650,8 +883,15 @@ class MultiUserTelegramBot:
                 parse_mode="HTML",
                 reply_markup=self._get_user_keyboard(True)
             )
+        elif data == "keep_paused":
+            await query.edit_message_text(
+                "⏸️ <b>Monitoring Kept in Stock Alerts Only Mode.</b>\n\n"
+                "No order was placed. You will continue receiving stock alerts.",
+                parse_mode="HTML",
+                reply_markup=self._get_user_keyboard(False)
+            )
         elif data == "change_pincode":
-            database.set_user_onboarding_state(chat_id, "AWAITING_PINCODE")
+            database.set_user_onboarding_state(chat_id, "AWAITING_PINCODE_UPDATE")
             await query.message.reply_text("📍 Please reply with your new 6-digit delivery pincode:")
         elif data == "cancel_checkout":
             if chat_id in self.active_checkouts:
@@ -904,6 +1144,8 @@ class MultiUserTelegramBot:
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
         self.app.add_handler(CommandHandler("status", self.cmd_status))
+        self.app.add_handler(CommandHandler(["mode", "set_mode"], self.cmd_mode))
+        self.app.add_handler(CommandHandler(["notify", "alerts", "notify_only"], self.cmd_notify_only))
         self.app.add_handler(CommandHandler(["product", "change_product", "item"], self.cmd_product))
         self.app.add_handler(CommandHandler("relogin", self.cmd_relogin))
         self.app.add_handler(CommandHandler(["pause", "snooze"], self.cmd_pause))

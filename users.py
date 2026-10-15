@@ -19,25 +19,39 @@ def view_all_users():
             return
 
         total = len(users)
-        active_count = sum(1 for u in users if u.is_auto_buy_active()[0])
-        paused_count = total - active_count
+        autobuy_count = 0
+        notify_count = 0
+        paused_count = 0
+        for u in users:
+            is_act, _, reason = u.is_auto_buy_active()
+            if is_act:
+                autobuy_count += 1
+            elif "notify" in (reason or "").lower():
+                notify_count += 1
+            else:
+                paused_count += 1
 
-        print("\n" + "=" * 110)
-        print(f"👥 AMUL BOT USER DIRECTORY — Total: {total} | Active: {active_count} | Paused: {paused_count}")
-        print("=" * 110)
+        print("\n" + "=" * 115)
+        print(f"👥 AMUL BOT USER DIRECTORY — Total: {total} | 🟢 Auto-Buy: {autobuy_count} | 🔔 Notify-Only: {notify_count} | ⏸️ Paused: {paused_count}")
+        print("=" * 115)
 
-        fmt = "{:<12} {:<15} {:<12} {:<8} {:<18} {:<28} {:<10}"
-        print(fmt.format("Chat ID", "Username", "Phone", "Pincode", "Warehouse", "Target Product", "Auto-Buy"))
-        print("-" * 110)
+        fmt = "{:<12} {:<15} {:<12} {:<8} {:<18} {:<26} {:<16}"
+        print(fmt.format("Chat ID", "Username", "Phone", "Pincode", "Warehouse", "Target Product", "Mode"))
+        print("-" * 115)
 
         for u in users:
             is_active, _, reason = u.is_auto_buy_active()
-            status_str = "🟢 ACTIVE" if is_active else "⏸️ PAUSED"
+            if is_active:
+                status_str = "🟢 AUTO-BUY"
+            elif "notify" in (reason or "").lower():
+                status_str = "🔔 NOTIFY-ONLY"
+            else:
+                status_str = f"⏸️ PAUSED"
             username_str = f"@{u.telegram_username}" if u.telegram_username else "-"
             phone_str = u.phone_number or "-"
             pincode_str = u.pincode or "-"
             warehouse_str = (u.substore_name or "-")[:17]
-            target_str = (u.target_name or "Choc Whey 60s")[:27]
+            target_str = (u.target_name or "Choc Whey 60s")[:25]
 
             print(fmt.format(
                 str(u.telegram_chat_id),
@@ -49,7 +63,7 @@ def view_all_users():
                 status_str
             ))
 
-        print("=" * 110)
+        print("=" * 115)
 
         deleted_logs = database.get_deleted_user_logs()
         if deleted_logs:
