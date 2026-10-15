@@ -130,7 +130,8 @@ async def run_bot():
         force_buy_event=force_buy_event,
         pincode=pincode,
         substore_id=substore_id,
-        target_name="Amul Chocolate Whey Protein (60 sachets)"
+        target_name="Amul Chocolate Whey Protein (60 sachets)",
+        target_alias=target_alias
     )
 
     # Start Telegram background listener

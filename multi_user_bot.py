@@ -71,14 +71,15 @@ class MultiUserTelegramBot:
                     InlineKeyboardButton("⏸️ 3 Mos", callback_data="pause_90"),
                 ],
                 [
-                    InlineKeyboardButton("🔔 Switch to Alerts Only", callback_data="switch_notify_only"),
+                    InlineKeyboardButton("🔍 Check Live Stock", callback_data="check_stock"),
                     InlineKeyboardButton("📦 Change Product", callback_data="change_product"),
                 ],
                 [
+                    InlineKeyboardButton("🔔 Switch to Alerts Only", callback_data="switch_notify_only"),
                     InlineKeyboardButton("📊 My Status", callback_data="status"),
-                    InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
                 ],
                 [
+                    InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
                     InlineKeyboardButton("🛑 Stop & Delete Account", callback_data="confirm_delete"),
                 ]
             ]
@@ -86,16 +87,29 @@ class MultiUserTelegramBot:
             keyboard = [
                 [
                     InlineKeyboardButton("⚡ Enable Auto-Buy", callback_data="resume"),
+                    InlineKeyboardButton("🔍 Check Live Stock", callback_data="check_stock"),
+                ],
+                [
                     InlineKeyboardButton("📦 Change Product", callback_data="change_product"),
-                ],
-                [
                     InlineKeyboardButton("📊 My Status", callback_data="status"),
-                    InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
                 ],
                 [
+                    InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
                     InlineKeyboardButton("🛑 Stop & Delete Account", callback_data="confirm_delete"),
                 ]
             ]
+        return InlineKeyboardMarkup(keyboard)
+
+    def _get_stock_report_keyboard(self, is_active: bool) -> InlineKeyboardMarkup:
+        keyboard = [
+            [
+                InlineKeyboardButton("🔄 Refresh Stock", callback_data="check_stock"),
+                InlineKeyboardButton("📦 Change Product", callback_data="change_product"),
+            ],
+            [
+                InlineKeyboardButton("📊 Back to Dashboard", callback_data="status"),
+            ]
+        ]
         return InlineKeyboardMarkup(keyboard)
 
     def _get_mode_selection_keyboard(self) -> InlineKeyboardMarkup:
@@ -137,6 +151,7 @@ class MultiUserTelegramBot:
                 f"📦 <b>Target Product:</b> {target_str}\n"
                 f"🎯 <b>Monitoring Mode:</b> {mode_str}\n\n"
                 f"<b>Quick Actions:</b>\n"
+                f"• <code>/stock</code> - Check live warehouse stock & quantity\n"
                 f"• <code>/product</code> - Choose or change target product\n"
                 f"• <code>/mode</code> - Switch between Auto-Buy and Alerts-Only\n"
                 f"• <code>/status</code> - View monitoring details\n"
@@ -167,6 +182,7 @@ class MultiUserTelegramBot:
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             "📖 <b>Amul Auto-Buy Commands & Guide</b>\n\n"
+            "• <code>/stock</code> - Check live inventory & stock quantity in your warehouse\n"
             "• <code>/product</code> - Choose your target product or paste any custom Amul link\n"
             "• <code>/mode</code> - Switch between Auto-Buy and Stock Alerts Only\n"
             "• <code>/status</code> - View your current warehouse, pincode, and target product\n"
@@ -275,6 +291,87 @@ class MultiUserTelegramBot:
             parse_mode="HTML",
             reply_markup=self._get_user_keyboard(is_active)
         )
+
+    async def cmd_check_stock(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        user = database.get_user(chat_id)
+        if not user or user.onboarding_state not in ("READY", "CHOOSE_MODE"):
+            await update.message.reply_text("⚠️ Setup not complete. Send /start to begin onboarding.")
+            return
+
+        if not user.substore_id:
+            await update.message.reply_text("⚠️ No delivery warehouse configured. Send /pincode to set your delivery location.")
+            return
+
+        status_msg = await update.message.reply_text("🔍 <i>Checking live warehouse stock on Amul Store...</i>", parse_mode="HTML")
+        await self._render_stock_report(user, status_msg, is_edit=True)
+
+    async def _render_stock_report(self, user: User, target_message: Any, is_edit: bool = True):
+        alias = user.target_alias or "amul-chocolate-whey-protein-34-g-or-pack-of-60-sachets"
+        sku = user.target_sku or "WPCCP05_02"
+        warehouse_name = user.substore_name or "Regional Warehouse"
+        pincode = user.pincode or "N/A"
+        prod_url = f"https://shop.amul.com/en/product/{alias}"
+
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(None, resolve_amul_product, alias, user.substore_id)
+
+        target_name = (res and res.get("name")) or user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+        now_str = datetime.now().strftime("%H:%M:%S")
+
+        is_active, _, reason = user.is_auto_buy_active()
+        mode_str = "🟢 <b>Auto-Buy Active</b>" if is_active else f"🔔 <b>Stock Alerts Only</b> (<i>{reason}</i>)"
+
+        if res and res.get("in_stock"):
+            qty = res.get("inventory_quantity", 0)
+            price_val = res.get("price")
+            price_str = f"₹{price_val:,}" if price_val else "Store Price"
+            stock_badge = f"🟢 <b>IN STOCK: {qty} UNITS AVAILABLE!</b>"
+            action_tip = (
+                "⚡ <i>Auto-buy is active and primed to purchase!</i>"
+                if is_active
+                else "🔔 <i>Stock is available now! Use the link below to purchase manually.</i>"
+            )
+        elif res:
+            qty = res.get("inventory_quantity", 0)
+            price_val = res.get("price")
+            price_str = f"₹{price_val:,}" if price_val else "Store Price"
+            stock_badge = f"🔴 <b>OUT OF STOCK ({qty} units available)</b>"
+            action_tip = (
+                "🛡️ <b>24/7 Monitoring Active:</b>\n"
+                "Our automated poller is checking your regional warehouse continuously every 60s. "
+                "The instant Amul replenishes stock, you will be notified / checked out immediately!"
+            )
+        else:
+            price_str = "Store Price"
+            stock_badge = "🔴 <b>OUT OF STOCK (0 units available)</b>"
+            action_tip = (
+                "🛡️ <b>24/7 Monitoring Active:</b>\n"
+                "Our automated poller is checking your regional warehouse continuously every 60s."
+            )
+
+        msg = (
+            f"📦 <b>Live Warehouse Stock Report</b>\n\n"
+            f"🎯 <b>Target Product:</b> <b>{target_name}</b>\n"
+            f"🏷️ <b>SKU:</b> <code>{sku}</code> | 💰 <b>Price:</b> {price_str}\n"
+            f"📍 <b>Warehouse:</b> <b>{warehouse_name}</b> (Pincode: <code>{pincode}</code>)\n"
+            f"🎯 <b>Your Mode:</b> {mode_str}\n\n"
+            f"📊 <b>CURRENT INVENTORY:</b>\n"
+            f"{stock_badge}\n\n"
+            f"{action_tip}\n\n"
+            f"🕒 <i>Checked live at {now_str} IST</i>\n"
+            f"🔗 <a href='{prod_url}'>View Product on Amul Store</a>"
+        )
+
+        keyboard = self._get_stock_report_keyboard(is_active)
+
+        if is_edit:
+            try:
+                await target_message.edit_text(msg, parse_mode="HTML", disable_web_page_preview=True, reply_markup=keyboard)
+            except Exception as e:
+                logger.debug(f"Stock report edit note: {e}")
+        else:
+            await target_message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True, reply_markup=keyboard)
 
     async def cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
@@ -964,6 +1061,12 @@ class MultiUserTelegramBot:
                 parse_mode="HTML",
                 reply_markup=self._get_user_keyboard(is_active)
             )
+        elif data == "check_stock":
+            if not user.substore_id:
+                await query.answer("Delivery warehouse not configured. Send /pincode first.", show_alert=True)
+                return
+            await query.answer("🔍 Checking live warehouse inventory...")
+            await self._render_stock_report(user, query.message, is_edit=True)
         elif data == "confirm_delete":
             msg = (
                 "🛑 <b>Stop Monitoring & Delete Account?</b>\n\n"
@@ -1239,6 +1342,7 @@ class MultiUserTelegramBot:
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
         self.app.add_handler(CommandHandler("status", self.cmd_status))
+        self.app.add_handler(CommandHandler(["stock", "check", "check_stock", "inventory"], self.cmd_check_stock))
         self.app.add_handler(CommandHandler(["mode", "set_mode"], self.cmd_mode))
         self.app.add_handler(CommandHandler(["notify", "alerts", "notify_only"], self.cmd_notify_only))
         self.app.add_handler(CommandHandler(["product", "change_product", "item"], self.cmd_product))

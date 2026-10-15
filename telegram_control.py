@@ -24,6 +24,10 @@ from telegram.ext import (
 )
 
 from state_manager import BotStateManager
+try:
+    from product_catalog import resolve_amul_product
+except ImportError:
+    resolve_amul_product = None
 
 logger = logging.getLogger("TelegramControl")
 
@@ -38,7 +42,8 @@ class TelegramBotController:
         force_buy_event: Optional[asyncio.Event] = None,
         pincode: str = "",
         substore_id: str = "",
-        target_name: str = "Amul Chocolate Whey Protein (60 sachets)"
+        target_name: str = "Amul Chocolate Whey Protein (60 sachets)",
+        target_alias: str = "amul-chocolate-whey-protein-34-g-or-pack-of-60-sachets"
     ):
         self.token = token.strip() if token else ""
         self.allowed_chat_id = str(chat_id).strip() if chat_id else ""
@@ -49,6 +54,7 @@ class TelegramBotController:
         self.pincode = pincode
         self.substore_id = substore_id
         self.target_name = target_name
+        self.target_alias = target_alias
         self.app: Optional[Application] = None
         self._is_running = False
 
@@ -69,7 +75,7 @@ class TelegramBotController:
                 InlineKeyboardButton("⏸️ 3 Months", callback_data="pause_90"),
             ],
             [
-                InlineKeyboardButton("⏸️ Indefinite", callback_data="pause_indefinite"),
+                InlineKeyboardButton("🔍 Check Live Stock", callback_data="check_stock"),
                 InlineKeyboardButton("▶️ Resume Auto-Buy", callback_data="resume"),
             ],
             [
@@ -87,6 +93,7 @@ class TelegramBotController:
             "This bot monitors stock for <b>Amul Chocolate Whey Protein (60 sachets)</b> "
             "and supports automatic checkout and smart purchase timeouts.\n\n"
             "📌 <b>Available Commands:</b>\n"
+            "• <code>/stock</code> - Check live warehouse inventory & stock quantity\n"
             "• <code>/status</code> - View monitoring status, stock, and purchase timeout\n"
             "• <code>/pause [duration]</code> - Snooze auto-purchases (e.g. <code>/pause 1m</code>, <code>/pause 2m</code>, <code>/pause 3m</code>, <code>/pause 60d</code>)\n"
             "• <code>/resume</code> - Resume auto-purchases immediately\n"
@@ -125,6 +132,58 @@ class TelegramBotController:
             f"🎉 <b>Orders Placed:</b> {orders_placed}\n"
         )
         await update.message.reply_text(msg, parse_mode="HTML", reply_markup=self._get_pause_keyboard())
+
+    async def _get_live_stock_text(self) -> str:
+        qty = self.state_manager.state.get("last_stock_qty", 0)
+        price_str = ""
+        in_stock = qty > 0
+
+        if self.substore_id and resolve_amul_product:
+            try:
+                loop = asyncio.get_running_loop()
+                res = await loop.run_in_executor(None, resolve_amul_product, self.target_alias, self.substore_id)
+                if res:
+                    qty = res.get("inventory_quantity", 0)
+                    in_stock = res.get("in_stock", False)
+                    price_val = res.get("price")
+                    if price_val:
+                        price_str = f"💰 <b>Price:</b> ₹{price_val:,}\n"
+                    self.state_manager.state["last_stock_qty"] = qty
+            except Exception as e:
+                logger.debug(f"Error querying live warehouse stock: {e}")
+
+        stock_badge = f"🟢 <b>IN STOCK: {qty} units available!</b>" if in_stock else f"🔴 <b>OUT OF STOCK ({qty} units available)</b>"
+        now_str = datetime.now().strftime("%H:%M:%S")
+        is_active, _, reason = self.state_manager.is_auto_buy_active()
+        mode_str = "🟢 <b>Auto-Buy Active</b>" if is_active else f"🔔 <b>Notify-Only Mode</b> (<i>{reason}</i>)"
+
+        action_tip = (
+            "⚡ <i>Auto-purchase is active and primed to trigger immediately on restock!</i>"
+            if is_active
+            else "🔔 <i>Stock monitoring is running in Notify-Only Mode. You will receive an instant alert when units become available.</i>"
+        )
+
+        msg = (
+            f"📦 <b>Live Warehouse Stock Report</b>\n\n"
+            f"🎯 <b>Target Product:</b> <b>{self.target_name}</b>\n"
+            f"{price_str}"
+            f"📍 <b>Warehouse:</b> <code>{self.substore_id}</code> (Pincode: <code>{self.pincode}</code>)\n"
+            f"🎯 <b>Mode:</b> {mode_str}\n\n"
+            f"📊 <b>CURRENT INVENTORY:</b>\n"
+            f"{stock_badge}\n\n"
+            f"🛡️ <b>24/7 Monitoring Active:</b>\n"
+            f"The bot continuously polls your regional warehouse every 60s.\n\n"
+            f"{action_tip}\n\n"
+            f"🕒 <i>Checked live at {now_str} IST</i>"
+        )
+        return msg
+
+    async def cmd_check_stock(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_authorized(update):
+            return
+        status_msg = await update.message.reply_text("🔍 <i>Checking live warehouse stock on Amul Store...</i>", parse_mode="HTML")
+        msg = await self._get_live_stock_text()
+        await status_msg.edit_text(msg, parse_mode="HTML", reply_markup=self._get_pause_keyboard())
 
     async def cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_authorized(update):
@@ -326,6 +385,17 @@ class TelegramBotController:
                     )
                 except Exception as e:
                     await query.edit_message_text(f"⚠️ Error emptying cart: {e}", reply_markup=self._get_pause_keyboard())
+        elif data == "check_stock":
+            await query.edit_message_text(
+                "🔍 <i>Checking live warehouse stock on Amul Store...</i>",
+                parse_mode="HTML"
+            )
+            msg = await self._get_live_stock_text()
+            await query.edit_message_text(
+                msg,
+                parse_mode="HTML",
+                reply_markup=self._get_pause_keyboard()
+            )
         elif data == "status":
             is_active, paused_until, reason = self.state_manager.is_auto_buy_active()
             mode_str = "🟢 <b>ACTIVE (Auto-buy enabled)</b>" if is_active else f"⏸️ <b>PAUSED</b> ({reason})"
@@ -351,6 +421,7 @@ class TelegramBotController:
 
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
+        self.app.add_handler(CommandHandler(["stock", "check", "check_stock", "inventory"], self.cmd_check_stock))
         self.app.add_handler(CommandHandler("status", self.cmd_status))
         self.app.add_handler(CommandHandler(["pause", "snooze"], self.cmd_pause))
         self.app.add_handler(CommandHandler(["resume", "unpause"], self.cmd_resume))
