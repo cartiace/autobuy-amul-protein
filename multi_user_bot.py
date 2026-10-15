@@ -275,12 +275,22 @@ class MultiUserTelegramBot:
         phone_str = f"+91 {user.phone_number}" if user.phone_number else "Not Linked (Alerts Only)"
         target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
 
+        saved_addr = database.get_user_delivery_address(chat_id)
+        addr_line = None
+        if saved_addr:
+            name = saved_addr.get("name")
+            parts = [saved_addr.get("address1"), saved_addr.get("city")]
+            combined = ", ".join(filter(None, parts))
+            addr_line = f"{name} ({combined})" if name and combined else (combined or name)
+        addr_str = f"🏠 <b>Confirmed Address:</b> {addr_line}\n" if addr_line else ""
+
         msg = (
             f"📊 <b>Your Personal Status Report</b>\n\n"
             f"🎯 <b>Monitoring Mode:</b> {mode_str}\n"
             f"📍 <b>Delivery Pincode:</b> <code>{user.pincode}</code>\n"
             f"🏪 <b>Warehouse:</b> <b>{user.substore_name}</b>\n"
             f"📱 <b>Amul Account:</b> {phone_str}\n"
+            f"{addr_str}"
             f"📦 <b>Target Product:</b> <b>{target_name}</b>\n"
             f"🏷️ <b>Target SKU:</b> <code>{user.target_sku}</code>\n"
             f"🔢 <b>Quantity:</b> {user.quantity}\n"
@@ -1051,13 +1061,22 @@ class MultiUserTelegramBot:
             mode_str = "🟢 <b>ACTIVE</b>" if is_active else f"⏸️ <b>PAUSED</b> ({reason})"
             phone_str = f"+91 {user.phone_number}" if user.phone_number else "Linked"
             target_str = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+
+            saved_addr = database.get_user_delivery_address(chat_id)
+            addr_line = None
+            if saved_addr:
+                parts = [saved_addr.get("address1"), saved_addr.get("city")]
+                addr_line = ", ".join(filter(None, parts))
+            addr_str = f"• Address: {addr_line}\n" if addr_line else ""
+
             await query.edit_message_text(
                 f"📊 <b>Status:</b>\n"
                 f"• Auto-Buy: {mode_str}\n"
                 f"• Target Product: <b>{target_str}</b>\n"
                 f"• SKU: <code>{user.target_sku}</code>\n"
                 f"• Pincode: <code>{user.pincode}</code> ({user.substore_name})\n"
-                f"• Account: {phone_str}",
+                f"• Account: {phone_str}\n"
+                f"{addr_str}".rstrip(),
                 parse_mode="HTML",
                 reply_markup=self._get_user_keyboard(is_active)
             )
@@ -1189,11 +1208,18 @@ class MultiUserTelegramBot:
                     )
 
                     try:
+                        saved_address = database.get_user_delivery_address(chat_id)
+
+                        def on_address_found(extracted_addr):
+                            database.update_user_delivery_address(chat_id, extracted_addr)
+
                         checkout = AmulAutoCheckout(
                             cookies_file=user_cookies_path,
                             target_url=prod_url,
                             substore_id=user.substore_id,
+                            substore_name=user.substore_name,
                             pincode=user.pincode,
+                            phone_number=user.phone_number,
                             product_name=target_prod_name,
                             product_amount=amount_str,
                             headless=True,
@@ -1201,13 +1227,18 @@ class MultiUserTelegramBot:
                             gateway=self.payment_gateway,
                             notifier=notifier,
                             payment_timeout_secs=self.payment_timeout_secs,
-                            cancel_event=cancel_event
+                            cancel_event=cancel_event,
+                            initial_delivery_address=saved_address,
+                            on_address_extracted=on_address_found
                         )
 
                         success, order_id, msg = await checkout.execute_checkout()
                         last_error = msg or last_error
 
                         if success:
+                            if checkout.delivery_address:
+                                database.update_user_delivery_address(chat_id, checkout.delivery_address)
+
                             # Snooze user auto-buy for configured months post-purchase
                             pause_days = float(self.post_purchase_pause_months * 30)
                             paused_until, snooze_reason = database.pause_user_autobuy(
@@ -1217,9 +1248,16 @@ class MultiUserTelegramBot:
                             )
                             expiry_str = paused_until.strftime("%d %b %Y, %H:%M UTC")
 
+                            addr_info = checkout.delivery_address or saved_address
+                            dest_str = ""
+                            if addr_info and addr_info.get("address1"):
+                                dest_str = f"\nDelivery: {addr_info['address1']}, {addr_info.get('city', '')} ({user.pincode})"
+                            elif user.pincode:
+                                dest_str = f"\nDelivery: Pincode {user.pincode} ({user.substore_name or 'Regional Warehouse'})"
+
                             await notifier.notify_order_placed(
                                 order_id=order_id,
-                                details=f"Product: {target_prod_name}\nQuantity: {user.quantity}\nPayment: Verified via UPI",
+                                details=f"Product: {target_prod_name}\nQuantity: {user.quantity}\nPayment: Verified via UPI{dest_str}",
                                 paused_until_str=expiry_str
                             )
                             logger.info(f"🎉 Auto-buy succeeded on attempt {attempt} for user {chat_id}! Order ID: {order_id}")

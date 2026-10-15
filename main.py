@@ -50,6 +50,7 @@ async def run_bot():
     telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     cookies_file = os.getenv("COOKIES_FILE", "cookies.json").strip()
     pincode = os.getenv("DELIVERY_PINCODE", "").strip()
+    phone_number = os.getenv("AMUL_PHONE_NUMBER", "").strip()
     headless_str = os.getenv("HEADLESS", "true").strip().lower()
     headless = headless_str not in ("false", "0", "no")
     poll_interval = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
@@ -113,6 +114,7 @@ async def run_bot():
         target_url=target_url,
         substore_id=substore_id,
         pincode=pincode,
+        phone_number=phone_number,
         headless=headless,
         quantity=quantity,
         gateway=payment_gateway,

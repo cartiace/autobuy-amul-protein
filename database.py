@@ -110,6 +110,9 @@ class User(Base):
     # Conversational Onboarding State: START, AWAITING_PINCODE, AWAITING_AUTH, READY
     onboarding_state = Column(String(50), default="START")
     
+    # Delivery address details from Amul account (JSON formatted)
+    delivery_address_json = Column(Text, nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_order_at = Column(DateTime, nullable=True)
@@ -198,6 +201,10 @@ def init_db():
             conn.execute(text("ALTER TABLE users ADD COLUMN target_name VARCHAR(255) DEFAULT 'Amul Chocolate Whey Protein (60 sachets)'"))
         except Exception:
             pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN delivery_address_json TEXT"))
+        except Exception:
+            pass
         conn.commit()
     logger.info("Database initialized successfully.")
 
@@ -235,6 +242,29 @@ def update_user_pincode(chat_id: int, pincode: str, substore_id: str, substore_n
             logger.info(f"Updated pincode={pincode}, substore={substore_name} ({substore_id}) for chat_id={chat_id}")
             return True
         return False
+
+def update_user_delivery_address(chat_id: int, address_data: Dict[str, Any]) -> bool:
+    """Saves or updates the user's confirmed Amul delivery address."""
+    with get_db() as db:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user and address_data:
+            user.delivery_address_json = json.dumps(address_data)
+            db.commit()
+            logger.info(f"Updated delivery address record for chat_id={chat_id}")
+            return True
+        return False
+
+def get_user_delivery_address(chat_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieves the user's saved Amul delivery address."""
+    with get_db() as db:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user and user.delivery_address_json:
+            try:
+                return json.loads(user.delivery_address_json)
+            except Exception as e:
+                logger.error(f"Error parsing delivery address json for chat_id={chat_id}: {e}")
+                return None
+        return None
 
 def set_user_cookies(chat_id: int, cookies_list: list) -> bool:
     with get_db() as db:

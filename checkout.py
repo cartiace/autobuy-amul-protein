@@ -27,6 +27,8 @@ class AmulAutoCheckout:
         substore_id: Optional[str] = None,
         pincode: Optional[str] = None,
         substore_alias: Optional[str] = None,
+        substore_name: Optional[str] = None,
+        phone_number: Optional[str] = None,
         product_name: str = "Amul Product",
         product_amount: Optional[str] = None,
         headless: bool = True,
@@ -34,13 +36,17 @@ class AmulAutoCheckout:
         gateway: str = "easebuzz",
         notifier: Optional[Any] = None,
         payment_timeout_secs: int = 600,
-        cancel_event: Optional[asyncio.Event] = None
+        cancel_event: Optional[asyncio.Event] = None,
+        initial_delivery_address: Optional[Dict[str, Any]] = None,
+        on_address_extracted: Optional[Any] = None,
     ):
         self.cookies_file = cookies_file
         self.target_url = target_url
         self.substore_id = substore_id
         self.pincode = pincode
         self.substore_alias = substore_alias
+        self.substore_name = substore_name
+        self.phone_number = phone_number
         self.product_name = product_name
         self.product_amount = product_amount
         self.headless = headless
@@ -49,11 +55,14 @@ class AmulAutoCheckout:
         self.notifier = notifier
         self.payment_timeout_secs = payment_timeout_secs
         self.cancel_event = cancel_event
+        self.delivery_address = initial_delivery_address
+        self.initial_delivery_address = initial_delivery_address
+        self.on_address_extracted = on_address_extracted
         self.screenshots_dir = "screenshots"
         os.makedirs(self.screenshots_dir, exist_ok=True)
 
         # Auto-resolve missing substore ID or alias from pincode if available
-        if (not self.substore_id or not self.substore_alias) and self.pincode:
+        if (not self.substore_id or not self.substore_alias or not self.substore_name) and self.pincode:
             try:
                 from pincode_resolver import resolver
                 res = resolver.resolve(self.pincode)
@@ -62,6 +71,8 @@ class AmulAutoCheckout:
                         self.substore_id = res.get("substore_id")
                     if not self.substore_alias:
                         self.substore_alias = res.get("substore_alias")
+                    if not self.substore_name:
+                        self.substore_name = res.get("warehouse_name")
             except Exception as e:
                 logger.debug(f"Pincode auto-resolution note: {e}")
 
@@ -466,8 +477,123 @@ class AmulAutoCheckout:
 
         return False
 
+    async def _extract_delivery_address(self, page: Page) -> Optional[Dict[str, Any]]:
+        """
+        Extracts selected delivery address and recipient details from StoreHippo client state or DOM.
+        """
+        try:
+            addr = await page.evaluate("""(targetPin) => {
+                const clean = (val) => val ? String(val).trim() : null;
+                const result = {
+                    name: null,
+                    phone: null,
+                    address1: null,
+                    address2: null,
+                    city: null,
+                    state: null,
+                    pincode: null,
+                    raw_text: null
+                };
+
+                const populateFromObj = (obj) => {
+                    if (!obj || typeof obj !== 'object') return false;
+                    const name = obj.name || [obj.first_name, obj.last_name].filter(Boolean).join(' ');
+                    const phone = obj.phone || obj.mobile;
+                    const addr1 = obj.address || obj.address1 || obj.line1 || obj.street;
+                    const addr2 = obj.address2 || obj.line2 || obj.landmark;
+                    const city = obj.city;
+                    const state = obj.state;
+                    const pin = obj.zip || obj.pincode;
+
+                    if (name || addr1 || pin) {
+                        result.name = clean(name);
+                        result.phone = clean(phone);
+                        result.address1 = clean(addr1);
+                        result.address2 = clean(addr2);
+                        result.city = clean(city);
+                        result.state = clean(state);
+                        result.pincode = clean(pin);
+                        return true;
+                    }
+                    return false;
+                };
+
+                // 1. Check window.ms.cart.shipping_address
+                try {
+                    if (window.ms && window.ms.cart && window.ms.cart.shipping_address) {
+                        if (populateFromObj(window.ms.cart.shipping_address)) {
+                            return result;
+                        }
+                    }
+                } catch (e) {}
+
+                // 2. Check window.ms.user.addresses
+                try {
+                    if (window.ms && window.ms.user && Array.isArray(window.ms.user.addresses) && window.ms.user.addresses.length > 0) {
+                        const addrs = window.ms.user.addresses;
+                        let matched = null;
+                        if (targetPin) {
+                            matched = addrs.find(a => String(a.zip || a.pincode || '').trim() === String(targetPin).trim());
+                        }
+                        if (!matched) {
+                            matched = addrs.find(a => a.is_default || a.default) || addrs[0];
+                        }
+                        if (populateFromObj(matched)) {
+                            return result;
+                        }
+                    }
+                } catch (e) {}
+
+                // 3. Check selected address card / element in DOM
+                try {
+                    const selectors = [
+                        '.address-card.selected',
+                        '.address-item.selected',
+                        '.selected-address',
+                        '.address-selected',
+                        '.address-item:has(input[type="radio"]:checked)',
+                        '.address-card:has(input[type="radio"]:checked)',
+                        '.shipping-address',
+                        '.delivery-address'
+                    ];
+                    for (const sel of selectors) {
+                        const card = document.querySelector(sel);
+                        if (card) {
+                            const text = card.innerText.trim();
+                            if (text.length > 10) {
+                                result.raw_text = text;
+                                const pinMatch = text.match(/\\b\\d{6}\\b/);
+                                if (pinMatch && !result.pincode) result.pincode = pinMatch[0];
+                                const phoneMatch = text.match(/(?:\\+91[\\s-]?)?[6-9]\\d{9}/);
+                                if (phoneMatch && !result.phone) result.phone = phoneMatch[0];
+                                return result;
+                            }
+                        }
+                    }
+                } catch (e) {}
+
+                return null;
+            }""", self.pincode)
+
+            if addr:
+                logger.info(f"📍 Successfully extracted delivery address from Amul checkout: {addr}")
+                self.delivery_address = addr
+                if self.on_address_extracted:
+                    try:
+                        if asyncio.iscoroutinefunction(self.on_address_extracted):
+                            await self.on_address_extracted(addr)
+                        else:
+                            self.on_address_extracted(addr)
+                    except Exception as cb_err:
+                        logger.debug(f"on_address_extracted callback error: {cb_err}")
+                return addr
+        except Exception as e:
+            logger.debug(f"Error during delivery address extraction: {e}")
+
+        return None
+
     async def _handle_address_selection(self, page: Page):
-        """Ensures a delivery address is selected."""
+        """Ensures a delivery address is selected and extracts recipient details."""
         await self._safe_dismiss_location_modal(page)
 
         # 1. Re-assert pincode in localStorage so StoreHippo renders matching addresses
@@ -482,6 +608,7 @@ class AmulAutoCheckout:
             logger.info("Clicking 'Use this address' button...")
             await use_addr_btn.first.click()
             await page.wait_for_timeout(1500)
+            await self._extract_delivery_address(page)
             return
 
         # 3. Radio button / address card selection
@@ -525,6 +652,9 @@ class AmulAutoCheckout:
         if await continue_btn.count() > 0 and await continue_btn.first.is_visible():
             await continue_btn.first.click()
             await page.wait_for_timeout(2000)
+
+        # 6. Extract delivery address details
+        await self._extract_delivery_address(page)
 
     async def _select_gateway(self, page: Page):
         """Selects the configured payment gateway on the checkout page."""
@@ -615,12 +745,16 @@ class AmulAutoCheckout:
 
         # Send instant photo alert to Telegram
         if self.notifier and self.notifier.is_configured():
-            logger.info("🚀 Dispatching UPI QR Code image to Telegram with Cancel button...")
+            logger.info("🚀 Dispatching UPI QR Code image to Telegram with Cancel button & Delivery Address...")
             await self.notifier.notify_upi_payment_required(
                 photo_path=qr_photo_path,
                 amount=self.product_amount or "Verified on Screen",
                 product_name=self.product_name,
-                timeout_mins=int(self.payment_timeout_secs / 60)
+                timeout_mins=int(self.payment_timeout_secs / 60),
+                delivery_address=self.delivery_address or self.initial_delivery_address,
+                recipient_phone=self.phone_number,
+                pincode=self.pincode,
+                warehouse_name=self.substore_name
             )
 
         # Wait for user to scan and complete payment on phone or cancel
@@ -647,7 +781,11 @@ class AmulAutoCheckout:
                 photo_path=qr_photo_path,
                 amount=self.product_amount or "Verified on Screen",
                 product_name=self.product_name,
-                timeout_mins=int(self.payment_timeout_secs / 60)
+                timeout_mins=int(self.payment_timeout_secs / 60),
+                delivery_address=self.delivery_address or self.initial_delivery_address,
+                recipient_phone=self.phone_number,
+                pincode=self.pincode,
+                warehouse_name=self.substore_name
             )
 
         logger.info(f"⏳ Waiting up to {self.payment_timeout_secs}s for mobile payment authorization...")

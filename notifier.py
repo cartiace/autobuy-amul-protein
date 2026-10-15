@@ -13,6 +13,80 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 logger = logging.getLogger("AmulNotifier")
 
+def format_delivery_address_caption(
+    delivery_address: Optional[Dict[str, Any]] = None,
+    recipient_phone: Optional[str] = None,
+    pincode: Optional[str] = None,
+    warehouse_name: Optional[str] = None,
+) -> str:
+    """
+    Constructs a reassuring, crystal-clear delivery address section for the UPI QR notification.
+    """
+    lines = []
+    
+    name = None
+    phone = recipient_phone
+    addr_line = None
+    city_state = None
+    pin = pincode
+
+    if isinstance(delivery_address, dict):
+        name = delivery_address.get("name")
+        phone = delivery_address.get("phone") or phone
+        pin = delivery_address.get("pincode") or pin
+        
+        # Build street address
+        parts = []
+        if delivery_address.get("address1"):
+            parts.append(str(delivery_address["address1"]).strip())
+        if delivery_address.get("address2"):
+            parts.append(str(delivery_address["address2"]).strip())
+        if parts:
+            addr_line = ", ".join(parts)
+            
+        # Build city/state
+        cs_parts = []
+        if delivery_address.get("city"):
+            cs_parts.append(str(delivery_address["city"]).strip())
+        if delivery_address.get("state"):
+            cs_parts.append(str(delivery_address["state"]).strip())
+        if cs_parts:
+            city_state = ", ".join(cs_parts)
+            
+        raw_text = delivery_address.get("raw_text")
+        if not addr_line and raw_text:
+            cleaned_raw = " ".join(raw_text.split())
+            if len(cleaned_raw) > 120:
+                cleaned_raw = cleaned_raw[:117] + "..."
+            addr_line = cleaned_raw
+
+    if name or addr_line:
+        lines.append("📍 <b>CONFIRMED DELIVERY ADDRESS:</b>")
+        if name:
+            lines.append(f"👤 <b>Deliver To:</b> {name}")
+        if phone:
+            phone_str = str(phone) if str(phone).startswith("+91") else f"+91 {phone}"
+            lines.append(f"📱 <b>Contact Phone:</b> {phone_str}")
+        if addr_line:
+            lines.append(f"🏠 <b>Address:</b> {addr_line}")
+        if city_state:
+            lines.append(f"🏙️ <b>City / State:</b> {city_state}")
+        if pin:
+            pin_extra = f" ({warehouse_name})" if warehouse_name else ""
+            lines.append(f"📮 <b>Pincode:</b> <code>{pin}</code>{pin_extra}")
+    elif pin or phone:
+        lines.append("📍 <b>DELIVERY DESTINATION:</b>")
+        if phone:
+            phone_str = str(phone) if str(phone).startswith("+91") else f"+91 {phone}"
+            lines.append(f"📱 <b>Amul Account:</b> {phone_str}")
+        if pin:
+            pin_extra = f" ({warehouse_name})" if warehouse_name else ""
+            lines.append(f"📮 <b>Delivery Pincode:</b> <code>{pin}</code>{pin_extra}")
+
+    if lines:
+        return "\n".join(lines)
+    return ""
+
 class TelegramNotifier:
     def __init__(self, token: str, chat_id: str):
         self.token = token.strip() if token else ""
@@ -230,16 +304,30 @@ class TelegramNotifier:
         photo_path: str,
         amount: str,
         product_name: str,
-        timeout_mins: int = 10
+        timeout_mins: int = 10,
+        delivery_address: Optional[Dict[str, Any]] = None,
+        recipient_phone: Optional[str] = None,
+        pincode: Optional[str] = None,
+        warehouse_name: Optional[str] = None
     ) -> bool:
         """
-        Dispatches urgent UPI QR Code notification to Telegram with an instant Cancel button.
+        Dispatches urgent UPI QR Code notification to Telegram with confirmed delivery address
+        and an instant Cancel button.
         """
+        addr_block = format_delivery_address_caption(
+            delivery_address=delivery_address,
+            recipient_phone=recipient_phone,
+            pincode=pincode,
+            warehouse_name=warehouse_name
+        )
+        addr_section = f"\n\n{addr_block}" if addr_block else ""
+
         caption = (
             f"🚨 <b>URGENT: AMUL PRODUCT IN STOCK!</b>\n\n"
             f"📦 <b>Item:</b> {product_name}\n"
             f"💰 <b>Amount:</b> ₹{amount}\n"
-            f"⏰ <b>Expires in:</b> {timeout_mins} minutes\n\n"
+            f"⏰ <b>Expires in:</b> {timeout_mins} minutes"
+            f"{addr_section}\n\n"
             f"👉 <b>ACTION REQUIRED:</b>\n"
             f"1. Open any UPI app (GPay / PhonePe / Paytm / Cred / BHIM).\n"
             f"2. <b>Scan the QR code above</b> and authorize the payment.\n"
