@@ -246,6 +246,7 @@ class MultiUserTelegramBot:
     async def cmd_resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         database.resume_user_autobuy(chat_id)
+        database.mark_user_stock_notified(chat_id, False)
         msg = (
             "▶️ <b>Auto-Purchase Has Been RESUMED!</b>\n\n"
             "As soon as stock is detected in your regional warehouse, the bot will automatically "
@@ -544,6 +545,7 @@ class MultiUserTelegramBot:
             )
         elif data == "resume":
             database.resume_user_autobuy(chat_id)
+            database.mark_user_stock_notified(chat_id, False)
             await query.edit_message_text(
                 "▶️ <b>Auto-Purchase Resumed!</b>\n\n"
                 "The bot will automatically purchase next time stock is detected.",
@@ -698,23 +700,43 @@ class MultiUserTelegramBot:
         """
         Triggered when stock appears in a warehouse.
         Dispatches auto-checkout for active users and notify-only alerts for paused users.
+        Strictly limits to 1 notification / checkout dispatch per user per restock event.
         """
         prod_name = details.get("name", "Amul Chocolate Whey Protein 60 sachets")
-        logger.info(f"Broadcasting stock in warehouse {substore_id} to {len(users)} users...")
 
         for user in users:
+            chat_id = user.telegram_chat_id
+
+            # Rate-limiting: Ensure only 1 notification/dispatch per user for current stock
+            if not database.should_notify_user_stock(chat_id):
+                continue
+
+            # Mark user notified immediately
+            database.mark_user_stock_notified(chat_id, True)
+
             is_active, _, reason = user.is_auto_buy_active()
             if is_active:
-                # Spawn background checkout task
+                if chat_id in self.active_checkouts:
+                    logger.info(f"User {chat_id} already has checkout in progress. Skipping duplicate dispatch.")
+                    continue
+                logger.info(f"Triggering auto-checkout for active user {chat_id} (Stock: {stock_qty})...")
                 asyncio.create_task(self.dispatch_user_checkout(user, prod_name, stock_qty))
             else:
-                # Notify-Only Mode
-                notifier = TelegramNotifier(token=self.token, chat_id=str(user.telegram_chat_id))
+                # Notify-Only Mode: Send exactly 1 notification
+                logger.info(f"Sending single stock alert to paused user {chat_id} (Reason: {reason})")
+                notifier = TelegramNotifier(token=self.token, chat_id=str(chat_id))
                 asyncio.create_task(notifier.notify_stock_alert_paused(
                     product_name=prod_name,
                     stock_qty=stock_qty,
                     paused_reason=reason
                 ))
+
+    async def handle_warehouse_out_of_stock(self, substore_id: str):
+        """
+        Triggered when warehouse drops to 0 stock.
+        Resets notification state in database so users are alerted on next restock.
+        """
+        database.reset_stock_notified_for_substore(substore_id)
 
     async def start(self):
         """Initializes and starts the Multi-User Telegram Bot."""

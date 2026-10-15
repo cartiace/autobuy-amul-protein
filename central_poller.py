@@ -25,13 +25,15 @@ class CentralStockPoller:
         target_alias: str = "amul-chocolate-whey-protein-34-g-or-pack-of-60-sachets",
         target_sku: str = "WPCCP05_02",
         cookies_file: str = "cookies.json",
-        on_stock_detected: Optional[Callable[[str, int, Dict[str, Any], List[User]], Any]] = None
+        on_stock_detected: Optional[Callable[[str, int, Dict[str, Any], List[User]], Any]] = None,
+        on_out_of_stock: Optional[Callable[[str], Any]] = None
     ):
         self.poll_interval = poll_interval
         self.target_alias = target_alias
         self.target_sku = target_sku
         self.cookies_file = cookies_file
         self.on_stock_detected = on_stock_detected
+        self.on_out_of_stock = on_out_of_stock
         self._is_running = False
         
         # Shared monitor instance for TID generation and session management
@@ -82,6 +84,12 @@ class CentralStockPoller:
                             await res
                 else:
                     logger.debug(f"Warehouse {sid}: Out of stock.")
+                    # Warehouse is out of stock -> reset notification locks so users are alerted on next restock
+                    database.reset_stock_notified_for_substore(sid)
+                    if self.on_out_of_stock:
+                        res = self.on_out_of_stock(sid)
+                        if asyncio.iscoroutine(res):
+                            await res
 
                 # Friendly delay between warehouse requests to prevent bursting
                 await asyncio.sleep(0.5)

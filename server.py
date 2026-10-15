@@ -72,7 +72,8 @@ async def main():
         target_alias=target_alias,
         target_sku=target_sku,
         cookies_file=os.getenv("COOKIES_FILE", "cookies.json"),
-        on_stock_detected=bot.handle_warehouse_stock
+        on_stock_detected=bot.handle_warehouse_stock,
+        on_out_of_stock=bot.handle_warehouse_out_of_stock
     )
 
     # 4. Start Telegram listener

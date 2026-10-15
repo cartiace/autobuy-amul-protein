@@ -109,6 +109,8 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_order_at = Column(DateTime, nullable=True)
+    in_stock_notified = Column(Boolean, default=False)
+    last_notified_at = Column(DateTime, nullable=True)
 
     orders = relationship("Order", back_populates="user", cascade="all, delete-orphan")
 
@@ -177,6 +179,18 @@ def get_db():
 def init_db():
     """Initializes tables in database."""
     Base.metadata.create_all(bind=engine)
+    # Safe migration for existing SQLite database
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN in_stock_notified BOOLEAN DEFAULT 0"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN last_notified_at DATETIME"))
+        except Exception:
+            pass
+        conn.commit()
     logger.info("Database initialized successfully.")
 
 def get_or_create_user(chat_id: int, username: Optional[str] = None) -> User:
@@ -351,3 +365,30 @@ def get_deleted_user_logs(limit: int = 50) -> List[DeletedUserLog]:
             .limit(limit)
             .all()
         )
+
+def should_notify_user_stock(chat_id: int) -> bool:
+    """Returns True if the user has NOT yet been notified for the current in-stock event."""
+    with get_db() as db:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if not user:
+            return False
+        return not bool(user.in_stock_notified)
+
+def mark_user_stock_notified(chat_id: int, notified: bool = True) -> None:
+    """Marks user as notified (or resets notification flag) for current stock."""
+    with get_db() as db:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user:
+            user.in_stock_notified = notified
+            if notified:
+                user.last_notified_at = datetime.utcnow()
+            db.commit()
+
+def reset_stock_notified_for_substore(substore_id: str) -> None:
+    """Resets in_stock_notified flag for all users in a warehouse when it goes out of stock."""
+    with get_db() as db:
+        db.query(User).filter(
+            User.substore_id == substore_id,
+            User.in_stock_notified == True
+        ).update({"in_stock_notified": False})
+        db.commit()
