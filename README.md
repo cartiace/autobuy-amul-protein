@@ -44,7 +44,8 @@ Supports both **Single-User Dedicated Bot** and **Multi-Tenant Public SaaS Serve
 | Command | Action |
 |---|---|
 | `/start` | Start interactive conversational onboarding (Pincode & Phone + OTP) or view dashboard |
-| `/status` | View personal monitoring status, stock, warehouse, and purchase timeout |
+| `/product` | Select from popular protein presets or paste any custom Amul link |
+| `/status` | View personal monitoring status, target product, stock, warehouse, and purchase timeout |
 | `/pause 1m` | Timeout/pause auto-purchases for **1 month** (30 days) |
 | `/pause 2m` | Timeout/pause auto-purchases for **2 months** (60 days) |
 | `/pause 3m` | Timeout/pause auto-purchases for **3 months** (90 days) |
@@ -65,12 +66,12 @@ Supports both **Single-User Dedicated Bot** and **Multi-Tenant Public SaaS Serve
 .
 ├── server.py             # Multi-User Production Server (500+ users, DB, Central Poller)
 ├── amul_auth.py          # Native In-Chat Phone + SMS OTP Login Engine via Stealth Playwright
+├── product_catalog.py    # Curated protein presets & dynamic StoreHippo URL resolution engine
 ├── database.py           # Multi-tenant SQLite/PostgreSQL schema + AES-256 encryption
 ├── pincode_resolver.py   # All-India automated pincode-to-substore resolution engine
-├── central_poller.py     # Aggregated stock poller querying unique regional substores
+├── central_poller.py     # Aggregated stock poller querying unique regional substores & targets
 ├── multi_user_bot.py     # Multi-user Telegram Bot controller & conversational onboarding
-├── central_poller.py     # Aggregated stock poller querying unique regional substores
-├── multi_user_bot.py     # Multi-user Telegram Bot controller & conversational onboarding
+├── users.py              # Admin CLI report viewing registered users, targets, and audit log
 ├── main.py               # Dedicated single-user orchestrator loop
 ├── checkout.py           # Playwright stealth auto-checkout engine with cancel support
 ├── monitor.py            # Internal StoreHippo API poller and SHA-256 TID generator

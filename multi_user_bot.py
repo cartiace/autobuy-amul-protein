@@ -32,6 +32,13 @@ from pincode_resolver import resolver
 from amul_auth import auth_manager
 from notifier import TelegramNotifier
 from checkout import AmulAutoCheckout
+from product_catalog import (
+    CURATED_PRODUCTS,
+    get_product_by_id,
+    get_product_selection_keyboard,
+    resolve_amul_product,
+    extract_alias_from_url
+)
 
 logger = logging.getLogger("MultiUserBot")
 
@@ -64,11 +71,12 @@ class MultiUserTelegramBot:
                     InlineKeyboardButton("⏸️ Pause 3 Mos", callback_data="pause_90"),
                 ],
                 [
+                    InlineKeyboardButton("📦 Change Product", callback_data="change_product"),
                     InlineKeyboardButton("📊 My Status", callback_data="status"),
-                    InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
                 ],
                 [
-                    InlineKeyboardButton("🛑 Stop & Delete Account", callback_data="confirm_delete"),
+                    InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
+                    InlineKeyboardButton("🛑 Stop & Delete", callback_data="confirm_delete"),
                 ]
             ]
         else:
@@ -78,6 +86,7 @@ class MultiUserTelegramBot:
                     InlineKeyboardButton("📊 My Status", callback_data="status"),
                 ],
                 [
+                    InlineKeyboardButton("📦 Change Product", callback_data="change_product"),
                     InlineKeyboardButton("📍 Change Pincode", callback_data="change_pincode"),
                 ],
                 [
@@ -106,13 +115,15 @@ class MultiUserTelegramBot:
             is_active, _, reason = user.is_auto_buy_active()
             mode_str = "🟢 <b>ACTIVE</b>" if is_active else f"⏸️ <b>PAUSED</b> ({reason})"
             phone_str = f"+91 {user.phone_number}" if user.phone_number else "Linked"
+            target_str = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
             msg = (
                 f"👋 <b>Welcome back, {username}!</b>\n\n"
                 f"📍 <b>Delivery Pincode:</b> <code>{user.pincode}</code> ({user.substore_name})\n"
                 f"📱 <b>Amul Account:</b> {phone_str}\n"
-                f"📦 <b>Target:</b> Amul Chocolate Whey Protein (60 sachets)\n"
+                f"📦 <b>Target Product:</b> {target_str}\n"
                 f"🛒 <b>Auto-Buy Status:</b> {mode_str}\n\n"
                 f"<b>Quick Actions:</b>\n"
+                f"• <code>/product</code> - Choose or change target product\n"
                 f"• <code>/status</code> - View monitoring details\n"
                 f"• <code>/pause [duration]</code> - Snooze purchases (e.g. <code>/pause 2m</code>)\n"
                 f"• <code>/resume</code> - Resume auto-buy anytime\n"
@@ -130,7 +141,7 @@ class MultiUserTelegramBot:
             database.set_user_onboarding_state(chat_id, "AWAITING_PINCODE")
             msg = (
                 f"👋 <b>Welcome to Amul Stock Monitor & Auto-Buy!</b>\n\n"
-                f"I monitor 24/7 for <b>Amul Chocolate Whey Protein (60 sachets)</b> restocks "
+                f"I monitor 24/7 for <b>Amul Store</b> restocks (Whey Protein, Buttermilk, Paneer, or any custom item) "
                 f"and automatically checkout as soon as your regional warehouse gets inventory.\n\n"
                 f"⚠️ <b>Before you begin, please ensure:</b>\n"
                 f"1. You already have an active account on <a href='https://shop.amul.com'>shop.amul.com</a>\n"
@@ -143,7 +154,8 @@ class MultiUserTelegramBot:
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             "📖 <b>Amul Auto-Buy Commands & Guide</b>\n\n"
-            "• <code>/status</code> - View your current warehouse, pincode, and purchase timeout\n"
+            "• <code>/product</code> - Choose your target product or paste any custom Amul link\n"
+            "• <code>/status</code> - View your current warehouse, pincode, and target product\n"
             "• <code>/pause 1m</code> - Timeout auto-purchase for 1 month (30 days)\n"
             "• <code>/pause 2m</code> - Timeout auto-purchase for 2 months (60 days)\n"
             "• <code>/pause 3m</code> - Timeout auto-purchase for 3 months (90 days)\n"
@@ -154,6 +166,29 @@ class MultiUserTelegramBot:
             "• <code>/stop</code> - Stop monitoring and delete your account from the bot"
         )
         await update.message.reply_text(msg, parse_mode="HTML")
+
+    async def cmd_product(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        user = database.get_user(chat_id)
+        if not user or user.onboarding_state not in ("READY", "AWAITING_PRODUCT_URL"):
+            await update.message.reply_text("⚠️ Setup not complete. Send /start to begin onboarding.")
+            return
+
+        target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+        msg = (
+            f"📦 <b>Target Product Selection</b>\n\n"
+            f"🎯 <b>Currently Monitored:</b>\n"
+            f"• <b>{target_name}</b>\n"
+            f"• SKU: <code>{user.target_sku}</code>\n"
+            f"• Link: <a href='https://shop.amul.com/en/product/{user.target_alias}'>View on Amul Store</a>\n\n"
+            f"👇 Tap a quick-select product below, or choose <b>🔗 Paste Custom Amul Link</b> to monitor any item from shop.amul.com:"
+        )
+        await update.message.reply_text(
+            msg,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=get_product_selection_keyboard(user.target_alias)
+        )
 
     async def cmd_relogin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
@@ -174,6 +209,7 @@ class MultiUserTelegramBot:
         is_active, paused_until, reason = user.is_auto_buy_active()
         mode_str = "🟢 <b>ACTIVE (Auto-buy enabled)</b>" if is_active else f"⏸️ <b>PAUSED (Notify-Only Mode)</b>\n<i>{reason}</i>"
         phone_str = f"+91 {user.phone_number}" if user.phone_number else "Linked"
+        target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
 
         msg = (
             f"📊 <b>Your Personal Status Report</b>\n\n"
@@ -181,7 +217,8 @@ class MultiUserTelegramBot:
             f"📍 <b>Delivery Pincode:</b> <code>{user.pincode}</code>\n"
             f"🏪 <b>Warehouse:</b> <b>{user.substore_name}</b>\n"
             f"📱 <b>Amul Account:</b> {phone_str}\n"
-            f"📦 <b>Target Product:</b> Amul Chocolate Whey Protein (60 sachets)\n"
+            f"📦 <b>Target Product:</b> <b>{target_name}</b>\n"
+            f"🏷️ <b>Target SKU:</b> <code>{user.target_sku}</code>\n"
             f"🔢 <b>Quantity:</b> {user.quantity}\n"
             f"📅 <b>Member Since:</b> {user.created_at.strftime('%d %b %Y')}\n"
         )
@@ -447,16 +484,17 @@ class MultiUserTelegramBot:
                 if success and cookies:
                     database.set_user_cookies(chat_id, cookies)
                     u = database.get_user(chat_id)
+                    target_name = u.target_name or "Amul Chocolate Whey Protein (60 sachets)"
                     congrats_msg = (
                         f"🎉 <b>Login Successful & Account Linked!</b>\n\n"
                         f"📍 <b>Delivery Pincode:</b> <code>{u.pincode}</code> ({u.substore_name})\n"
                         f"📱 <b>Amul Account:</b> +91 {u.phone_number}\n"
-                        f"📦 <b>Target Product:</b> Amul Chocolate Whey Protein (60 sachets)\n"
+                        f"📦 <b>Target Product:</b> {target_name}\n"
                         f"🛒 <b>Auto-Purchase:</b> 🟢 <b>ACTIVE</b>\n\n"
                         f"🔒 <i>Your session has been securely encrypted with AES-256.</i>\n\n"
                         f"The bot is now monitoring your warehouse 24/7. When stock arrives, "
                         f"you will receive your dynamic UPI QR code to complete payment in seconds.\n\n"
-                        f"Send <code>/status</code> anytime to manage your account."
+                        f"Send <code>/product</code> to change your target product anytime."
                     )
                     await status_msg.edit_text(
                         congrats_msg,
@@ -474,6 +512,66 @@ class MultiUserTelegramBot:
             else:
                 await update.message.reply_text("⚠️ The OTP must be a 6-digit number. Please enter the code from your SMS.", parse_mode="HTML")
             return
+
+        # State 4: Awaiting Custom Product URL or direct Amul product link pasted
+        is_amul_link = ("/product/" in text) or ("shop.amul.com" in text and "product" in text)
+        if user.onboarding_state == "AWAITING_PRODUCT_URL" or is_amul_link:
+            alias = extract_alias_from_url(text)
+            if alias:
+                status_msg = await update.message.reply_text("🔍 <i>Verifying product details with Amul network...</i>", parse_mode="HTML")
+                res = resolve_amul_product(text, substore_id=user.substore_id)
+                if res:
+                    database.update_user_product(
+                        chat_id=chat_id,
+                        target_alias=res["alias"],
+                        target_sku=res["sku"],
+                        target_name=res["name"]
+                    )
+                    database.set_user_onboarding_state(chat_id, "READY")
+                    
+                    price_str = f"₹{res['price']:,}" if res.get("price") else "Store Price"
+                    stock_str = (
+                        f"🟢 <b>In Stock</b> ({res['inventory_quantity']} units)"
+                        if res.get("in_stock")
+                        else f"🔴 <b>Out of Stock</b> ({res.get('inventory_quantity', 0)} units in your warehouse)"
+                    )
+                    
+                    is_active, _, _ = user.is_auto_buy_active()
+                    msg = (
+                        f"✅ <b>Target Product Successfully Updated!</b>\n\n"
+                        f"📦 <b>Product:</b> <b>{res['name']}</b>\n"
+                        f"🏷️ <b>SKU:</b> <code>{res['sku']}</code>\n"
+                        f"💰 <b>Price:</b> {price_str}\n"
+                        f"📍 <b>Warehouse Stock:</b> {stock_str}\n"
+                        f"🔗 <a href='{res['url']}'>View Product on Amul</a>\n\n"
+                        f"The bot is now monitoring this item 24/7 for delivery to pincode <code>{user.pincode}</code>. "
+                        f"When stock arrives, auto-buy will trigger immediately!"
+                    )
+                    await status_msg.edit_text(
+                        msg,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True
+                    )
+                    await update.message.reply_text(
+                        "👇 <b>Your Dashboard:</b>",
+                        reply_markup=self._get_user_keyboard(is_active)
+                    )
+                    return
+                else:
+                    await status_msg.edit_text(
+                        f"❌ Could not resolve product for:\n<code>{text}</code>\n\n"
+                        f"Please ensure it is an active product page on shop.amul.com (e.g. <code>https://shop.amul.com/en/product/...</code>).\n"
+                        f"Or use <code>/product</code> to select from popular protein items.",
+                        parse_mode="HTML"
+                    )
+                    return
+            elif user.onboarding_state == "AWAITING_PRODUCT_URL":
+                await update.message.reply_text(
+                    "⚠️ Please provide a valid Amul product URL (e.g. <code>https://shop.amul.com/en/product/...</code>) "
+                    "or type /product to choose from popular presets.",
+                    parse_mode="HTML"
+                )
+                return
 
         # Fallback: check if user pasted JSON cookies manually
         try:
@@ -561,13 +659,66 @@ class MultiUserTelegramBot:
                 await query.edit_message_text("❌ <b>Purchase Cancelled!</b> Session aborted.")
             else:
                 await query.edit_message_text("ℹ️ No active checkout session.")
+        elif data == "change_product":
+            target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+            msg = (
+                f"📦 <b>Target Product Selection</b>\n\n"
+                f"🎯 <b>Currently Monitored:</b>\n"
+                f"• <b>{target_name}</b>\n"
+                f"• SKU: <code>{user.target_sku}</code>\n"
+                f"• Link: <a href='https://shop.amul.com/en/product/{user.target_alias}'>View on Amul Store</a>\n\n"
+                f"👇 Choose a popular product below, or tap <b>🔗 Paste Custom Amul Link</b> to monitor any item from shop.amul.com:"
+            )
+            await query.edit_message_text(
+                msg,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=get_product_selection_keyboard(user.target_alias)
+            )
+        elif data.startswith("sel_prod_"):
+            prod_id = data.replace("sel_prod_", "")
+            prod = get_product_by_id(prod_id)
+            if prod:
+                database.update_user_product(
+                    chat_id=chat_id,
+                    target_alias=prod["alias"],
+                    target_sku=prod["sku"],
+                    target_name=prod["name"]
+                )
+                database.set_user_onboarding_state(chat_id, "READY")
+                is_active, _, _ = user.is_auto_buy_active()
+                msg = (
+                    f"✅ <b>Target Product Switched!</b>\n\n"
+                    f"📦 <b>Active Target:</b> <b>{prod['name']}</b>\n"
+                    f"🏷️ <b>SKU:</b> <code>{prod['sku']}</code> | 💰 <b>Price:</b> ₹{prod['price']:,}\n"
+                    f"📝 <i>{prod.get('short_desc', '')}</i>\n\n"
+                    f"The bot is now monitoring this product for your delivery warehouse. Auto-buy will trigger on the next restock!"
+                )
+                await query.edit_message_text(
+                    msg,
+                    parse_mode="HTML",
+                    reply_markup=self._get_user_keyboard(is_active)
+                )
+        elif data == "paste_product_link":
+            database.set_user_onboarding_state(chat_id, "AWAITING_PRODUCT_URL")
+            msg = (
+                f"🔗 <b>Paste Custom Amul Product URL</b>\n\n"
+                f"Please reply with the web link of any product on <a href='https://shop.amul.com'>shop.amul.com</a>.\n\n"
+                f"<b>Example:</b>\n"
+                f"<code>https://shop.amul.com/en/product/amul-whey-protein-32-g-or-pack-of-60-sachets</code>\n\n"
+                f"<i>The bot will inspect the product and switch your tracking target instantly.</i>"
+            )
+            await query.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
         elif data == "status":
             is_active, _, reason = user.is_auto_buy_active()
             mode_str = "🟢 <b>ACTIVE</b>" if is_active else f"⏸️ <b>PAUSED</b> ({reason})"
             phone_str = f"+91 {user.phone_number}" if user.phone_number else "Linked"
+            target_str = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
             await query.edit_message_text(
                 f"📊 <b>Status:</b>\n"
                 f"• Auto-Buy: {mode_str}\n"
+                f"• Target Product: <b>{target_str}</b>\n"
+                f"• SKU: <code>{user.target_sku}</code>\n"
                 f"• Pincode: <code>{user.pincode}</code> ({user.substore_name})\n"
                 f"• Account: {phone_str}",
                 parse_mode="HTML",
@@ -624,7 +775,7 @@ class MultiUserTelegramBot:
                 except Exception as e:
                     logger.warning(f"Could not send admin deletion alert: {e}")
 
-    async def dispatch_user_checkout(self, user: User, product_name: str, stock_qty: int):
+    async def dispatch_user_checkout(self, user: User, product_name: str, stock_qty: int, details: Optional[dict] = None):
         """
         Executes isolated checkout for a single user under concurrency control.
         """
@@ -652,11 +803,17 @@ class MultiUserTelegramBot:
                 json.dump(cookies_list, f)
 
             try:
+                price_val = details.get("price") if details else None
+                amount_str = f"{price_val:,}" if price_val else None
+                target_prod_name = user.target_name or product_name
+
                 checkout = AmulAutoCheckout(
                     cookies_file=user_cookies_path,
                     target_url=f"https://shop.amul.com/en/product/{user.target_alias}",
                     substore_id=user.substore_id,
                     pincode=user.pincode,
+                    product_name=target_prod_name,
+                    product_amount=amount_str,
                     headless=True,
                     quantity=user.quantity,
                     gateway=self.payment_gateway,
@@ -665,7 +822,7 @@ class MultiUserTelegramBot:
                     cancel_event=cancel_event
                 )
 
-                await notifier.notify_stock_alert(product_name, stock_qty)
+                await notifier.notify_stock_alert(target_prod_name, stock_qty)
                 success, order_id, msg = await checkout.execute_checkout()
 
                 if success:
@@ -680,7 +837,7 @@ class MultiUserTelegramBot:
 
                     await notifier.notify_order_placed(
                         order_id=order_id,
-                        details=f"Product: {product_name}\nQuantity: {user.quantity}\nPayment: Verified via UPI",
+                        details=f"Product: {target_prod_name}\nQuantity: {user.quantity}\nPayment: Verified via UPI",
                         paused_until_str=expiry_str
                     )
                 else:
@@ -702,10 +859,11 @@ class MultiUserTelegramBot:
         Dispatches auto-checkout for active users and notify-only alerts for paused users.
         Strictly limits to 1 notification / checkout dispatch per user per restock event.
         """
-        prod_name = details.get("name", "Amul Chocolate Whey Protein 60 sachets")
+        prod_name = details.get("name") or "Amul Product"
 
         for user in users:
             chat_id = user.telegram_chat_id
+            user_target_name = user.target_name or prod_name
 
             # Rate-limiting: Ensure only 1 notification/dispatch per user for current stock
             if not database.should_notify_user_stock(chat_id):
@@ -719,14 +877,14 @@ class MultiUserTelegramBot:
                 if chat_id in self.active_checkouts:
                     logger.info(f"User {chat_id} already has checkout in progress. Skipping duplicate dispatch.")
                     continue
-                logger.info(f"Triggering auto-checkout for active user {chat_id} (Stock: {stock_qty})...")
-                asyncio.create_task(self.dispatch_user_checkout(user, prod_name, stock_qty))
+                logger.info(f"Triggering auto-checkout for active user {chat_id} (Target: '{user_target_name}', Stock: {stock_qty})...")
+                asyncio.create_task(self.dispatch_user_checkout(user, user_target_name, stock_qty, details))
             else:
                 # Notify-Only Mode: Send exactly 1 notification
                 logger.info(f"Sending single stock alert to paused user {chat_id} (Reason: {reason})")
                 notifier = TelegramNotifier(token=self.token, chat_id=str(chat_id))
                 asyncio.create_task(notifier.notify_stock_alert_paused(
-                    product_name=prod_name,
+                    product_name=user_target_name,
                     stock_qty=stock_qty,
                     paused_reason=reason
                 ))
@@ -746,6 +904,7 @@ class MultiUserTelegramBot:
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
         self.app.add_handler(CommandHandler("status", self.cmd_status))
+        self.app.add_handler(CommandHandler(["product", "change_product", "item"], self.cmd_product))
         self.app.add_handler(CommandHandler("relogin", self.cmd_relogin))
         self.app.add_handler(CommandHandler(["pause", "snooze"], self.cmd_pause))
         self.app.add_handler(CommandHandler(["resume", "unpause"], self.cmd_resume))

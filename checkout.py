@@ -27,6 +27,8 @@ class AmulAutoCheckout:
         substore_id: Optional[str] = None,
         pincode: Optional[str] = None,
         substore_alias: Optional[str] = None,
+        product_name: str = "Amul Product",
+        product_amount: Optional[str] = None,
         headless: bool = True,
         quantity: int = 1,
         gateway: str = "easebuzz",
@@ -39,6 +41,8 @@ class AmulAutoCheckout:
         self.substore_id = substore_id
         self.pincode = pincode
         self.substore_alias = substore_alias
+        self.product_name = product_name
+        self.product_amount = product_amount
         self.headless = headless
         self.quantity = quantity
         self.gateway = (gateway or "easebuzz").strip().lower()
@@ -614,8 +618,8 @@ class AmulAutoCheckout:
             logger.info("🚀 Dispatching UPI QR Code image to Telegram with Cancel button...")
             await self.notifier.notify_upi_payment_required(
                 photo_path=qr_photo_path,
-                amount="4,500.00",
-                product_name="Amul Chocolate Whey Protein (Pack of 60 sachets)",
+                amount=self.product_amount or "Verified on Screen",
+                product_name=self.product_name,
                 timeout_mins=int(self.payment_timeout_secs / 60)
             )
 
@@ -641,8 +645,8 @@ class AmulAutoCheckout:
         if self.notifier and self.notifier.is_configured():
             await self.notifier.notify_upi_payment_required(
                 photo_path=qr_photo_path,
-                amount="4,500.00",
-                product_name="Amul Chocolate Whey Protein (Pack of 60 sachets)",
+                amount=self.product_amount or "Verified on Screen",
+                product_name=self.product_name,
                 timeout_mins=int(self.payment_timeout_secs / 60)
             )
 

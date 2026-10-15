@@ -104,17 +104,27 @@ class StockMonitor:
         hash_val = hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
         return f"{now_ts}:{rand_t}:{hash_val}"
 
-    def check_stock_api(self) -> Tuple[bool, int, Dict[str, Any]]:
+    def check_stock_api(
+        self,
+        target_alias: Optional[str] = None,
+        target_sku: Optional[str] = None,
+        substore_id: Optional[str] = None
+    ) -> Tuple[bool, int, Dict[str, Any]]:
         """
-        Polls Amul's internal product API using the configured substore ID.
+        Polls Amul's internal product API for a specific product and substore.
+        Supports checking any target product dynamically across regional warehouses.
         Returns:
             Tuple: (is_in_stock: bool, quantity: int, product_details: dict)
         """
+        alias = (target_alias or self.target_alias).strip()
+        sku = (target_sku or self.target_sku).strip()
+        sid = (substore_id or self.substore_id).strip()
+
         if not self.session_tid:
             self.refresh_session_tid()
 
         tid_val = self._generate_tid_header()
-        ref_url = f"{BASE_DOMAIN}/en/product/{self.target_alias}"
+        ref_url = f"{BASE_DOMAIN}/en/product/{alias}"
 
         headers = {
             "Accept": "application/json, text/plain, */*",
@@ -124,65 +134,22 @@ class StockMonitor:
             "base_url": ref_url,
         }
 
-        # Query endpoint 1: Category query for protein in regional substore
-        # (This endpoint is the most robust and returns actual regional warehouse stock)
-        cat_url = (
+        # 1. Direct alias filter query with substore (fastest & works for all categories)
+        direct_url = (
             f"{BASE_DOMAIN}/api/1/entity/ms.products?"
-            f"fields[name]=1&fields[brand]=1&fields[categories]=1&fields[collections]=1&"
-            f"fields[alias]=1&fields[sku]=1&fields[price]=1&fields[compare_price]=1&"
-            f"fields[seller]=1&fields[available]=1&fields[inventory_quantity]=1&"
-            f"fields[inventory_allow_out_of_stock]=1&fields[default_variant]=1&fields[variants]=1&"
-            f"filters[0][field]=categories&filters[0][value][0]=protein&filters[0][operator]=in&filters[0][original]=1&"
-            f"limit=50&start=0&v=6&device_type=other&substore={self.substore_id}"
+            f"filters[0][field]=alias&filters[0][value][0]={alias}&filters[0][operator]=in&filters[0][original]=1"
+            f"&substore={sid}&v=6"
         )
 
         try:
-            resp = self.session.get(cat_url, headers=headers, timeout=12)
+            resp = self.session.get(direct_url, headers=headers, timeout=12)
 
             if resp.status_code == 401:
-                # Token might have expired, refresh and retry once
                 logger.debug("Received 401, refreshing session TID and retrying...")
                 self.refresh_session_tid()
                 headers["tid"] = self._generate_tid_header()
-                resp = self.session.get(cat_url, headers=headers, timeout=12)
+                resp = self.session.get(direct_url, headers=headers, timeout=12)
 
-            if resp.status_code == 200:
-                data = resp.json()
-                items = data.get("data", [])
-                logger.debug(f"API returned {len(items)} items for substore {self.substore_id}.")
-
-                for item in items:
-                    alias = item.get("alias", "").lower()
-                    sku = item.get("sku", "").upper()
-                    name = item.get("name", "")
-
-                    if (self.target_alias.lower() in alias) or (self.target_sku.upper() == sku):
-                        is_available = bool(item.get("available") == 1 or item.get("available") is True)
-                        inventory_qty = int(item.get("inventory_quantity") or 0)
-                        logger.info(
-                            f"Matched Target Product: '{name}' | "
-                            f"SKU: {sku} | Available: {is_available} | Stock: {inventory_qty}"
-                        )
-                        in_stock = is_available and (inventory_qty > 0)
-                        return in_stock, inventory_qty, item
-
-                # If not found in category listing, test direct product filter query
-                return self._check_direct_product_query(headers)
-            else:
-                logger.warning(f"Stock API returned status {resp.status_code}: {resp.text[:200]}")
-        except Exception as e:
-            logger.error(f"Error querying Amul stock API: {e}")
-
-        return False, 0, {}
-
-    def _check_direct_product_query(self, headers: Dict[str, str]) -> Tuple[bool, int, Dict[str, Any]]:
-        """Fallback direct alias query with substore."""
-        query_url = (
-            f"{BASE_DOMAIN}/api/1/entity/ms.products?"
-            f"q=%7B%22alias%22:%22{self.target_alias}%22%7D&limit=1&substore={self.substore_id}&v=6"
-        )
-        try:
-            resp = self.session.get(query_url, headers=headers, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 items = data.get("data", [])
@@ -191,7 +158,39 @@ class StockMonitor:
                     is_available = bool(item.get("available") == 1 or item.get("available") is True)
                     inventory_qty = int(item.get("inventory_quantity") or 0)
                     in_stock = is_available and (inventory_qty > 0)
+                    logger.debug(
+                        f"Direct query matched: '{item.get('name')}' (SKU: {item.get('sku')}) | "
+                        f"Substore: {sid} | Available: {is_available} | Stock: {inventory_qty}"
+                    )
                     return in_stock, inventory_qty, item
         except Exception as e:
-            logger.debug(f"Direct query error: {e}")
+            logger.debug(f"Direct alias query error for '{alias}': {e}")
+
+        # 2. Fallback: Category query with substore
+        cat_url = (
+            f"{BASE_DOMAIN}/api/1/entity/ms.products?"
+            f"fields[name]=1&fields[brand]=1&fields[categories]=1&fields[collections]=1&"
+            f"fields[alias]=1&fields[sku]=1&fields[price]=1&fields[compare_price]=1&"
+            f"fields[seller]=1&fields[available]=1&fields[inventory_quantity]=1&"
+            f"fields[inventory_allow_out_of_stock]=1&fields[default_variant]=1&fields[variants]=1&"
+            f"filters[0][field]=categories&filters[0][value][0]=protein&filters[0][operator]=in&filters[0][original]=1&"
+            f"limit=50&start=0&v=6&device_type=other&substore={sid}"
+        )
+
+        try:
+            resp = self.session.get(cat_url, headers=headers, timeout=12)
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get("data", [])
+                for item in items:
+                    i_alias = item.get("alias", "").lower()
+                    i_sku = item.get("sku", "").upper()
+                    if (alias.lower() in i_alias) or (sku and sku.upper() == i_sku):
+                        is_available = bool(item.get("available") == 1 or item.get("available") is True)
+                        inventory_qty = int(item.get("inventory_quantity") or 0)
+                        in_stock = is_available and (inventory_qty > 0)
+                        return in_stock, inventory_qty, item
+        except Exception as e:
+            logger.error(f"Category fallback query error: {e}")
+
         return False, 0, {}

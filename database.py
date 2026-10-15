@@ -102,6 +102,10 @@ class User(Base):
         String(255),
         default="amul-chocolate-whey-protein-34-g-or-pack-of-60-sachets"
     )
+    target_name = Column(
+        String(255),
+        default="Amul Chocolate Whey Protein (60 sachets)"
+    )
     
     # Conversational Onboarding State: START, AWAITING_PINCODE, AWAITING_AUTH, READY
     onboarding_state = Column(String(50), default="START")
@@ -188,6 +192,10 @@ def init_db():
             pass
         try:
             conn.execute(text("ALTER TABLE users ADD COLUMN last_notified_at DATETIME"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN target_name VARCHAR(255) DEFAULT 'Amul Chocolate Whey Protein (60 sachets)'"))
         except Exception:
             pass
         conn.commit()
@@ -392,3 +400,59 @@ def reset_stock_notified_for_substore(substore_id: str) -> None:
             User.in_stock_notified == True
         ).update({"in_stock_notified": False})
         db.commit()
+
+def update_user_product(chat_id: int, target_alias: str, target_sku: str, target_name: str) -> bool:
+    """Updates target product configuration for a specific user and resets notification flag."""
+    with get_db() as db:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user:
+            user.target_alias = target_alias
+            user.target_sku = target_sku
+            user.target_name = target_name
+            user.in_stock_notified = False
+            user.last_notified_at = None
+            db.commit()
+            logger.info(
+                f"Updated target product for chat_id={chat_id}: '{target_name}' "
+                f"(SKU: {target_sku}, Alias: {target_alias})"
+            )
+            return True
+        return False
+
+def get_active_targets_for_substore(substore_id: str) -> List[Tuple[str, str, str]]:
+    """
+    Returns unique (target_alias, target_sku, target_name) tracked by READY users
+    in the specified regional warehouse.
+    """
+    with get_db() as db:
+        targets = (
+            db.query(User.target_alias, User.target_sku, User.target_name)
+            .distinct()
+            .filter(User.substore_id == substore_id)
+            .filter(User.onboarding_state == "READY")
+            .filter(User.target_alias.isnot(None))
+            .all()
+        )
+        return [(t[0], t[1], t[2] or "Amul Product") for t in targets if t[0]]
+
+def get_users_for_substore_and_target(substore_id: str, target_alias: str) -> List[User]:
+    """Returns all users in a specific warehouse monitoring a specific product alias."""
+    with get_db() as db:
+        return (
+            db.query(User)
+            .filter(User.substore_id == substore_id)
+            .filter(User.target_alias == target_alias)
+            .filter(User.onboarding_state == "READY")
+            .all()
+        )
+
+def reset_stock_notified_for_substore_and_target(substore_id: str, target_alias: str) -> None:
+    """Resets in_stock_notified flag for users monitoring a specific product in a warehouse."""
+    with get_db() as db:
+        db.query(User).filter(
+            User.substore_id == substore_id,
+            User.target_alias == target_alias,
+            User.in_stock_notified == True
+        ).update({"in_stock_notified": False})
+        db.commit()
+

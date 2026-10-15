@@ -22,13 +22,13 @@ def view_all_users():
         active_count = sum(1 for u in users if u.is_auto_buy_active()[0])
         paused_count = total - active_count
 
-        print("\n" + "=" * 95)
+        print("\n" + "=" * 110)
         print(f"👥 AMUL BOT USER DIRECTORY — Total: {total} | Active: {active_count} | Paused: {paused_count}")
-        print("=" * 95)
+        print("=" * 110)
 
-        fmt = "{:<12} {:<16} {:<12} {:<9} {:<22} {:<12} {:<12}"
-        print(fmt.format("Chat ID", "Username", "Phone", "Pincode", "Warehouse", "State", "Auto-Buy"))
-        print("-" * 95)
+        fmt = "{:<12} {:<15} {:<12} {:<8} {:<18} {:<28} {:<10}"
+        print(fmt.format("Chat ID", "Username", "Phone", "Pincode", "Warehouse", "Target Product", "Auto-Buy"))
+        print("-" * 110)
 
         for u in users:
             is_active, _, reason = u.is_auto_buy_active()
@@ -36,20 +36,20 @@ def view_all_users():
             username_str = f"@{u.telegram_username}" if u.telegram_username else "-"
             phone_str = u.phone_number or "-"
             pincode_str = u.pincode or "-"
-            warehouse_str = (u.substore_name or "-")[:21]
-            state_str = u.onboarding_state or "-"
+            warehouse_str = (u.substore_name or "-")[:17]
+            target_str = (u.target_name or "Choc Whey 60s")[:27]
 
             print(fmt.format(
                 str(u.telegram_chat_id),
-                username_str[:15],
+                username_str[:14],
                 phone_str[:12],
                 pincode_str[:8],
                 warehouse_str,
-                state_str[:11],
+                target_str,
                 status_str
             ))
 
-        print("=" * 95)
+        print("=" * 110)
 
         deleted_logs = database.get_deleted_user_logs()
         if deleted_logs:
