@@ -168,7 +168,30 @@ async def run_bot():
                         cancel_event.clear()
                         await notifier.notify_stock_alert(prod_name, stock_qty)
 
-                        success, order_id, message = await checkout_engine.execute_checkout()
+                        MAX_TRIES = 2
+                        last_message = "Unknown checkout error"
+                        success = False
+                        order_id = None
+
+                        for attempt in range(1, MAX_TRIES + 1):
+                            if cancel_event.is_set():
+                                logger.info("Checkout process cancelled by user via Telegram.")
+                                break
+
+                            logger.info(f"🛒 [AUTO-BUY ATTEMPT {attempt}/{MAX_TRIES}] Executing Playwright checkout...")
+                            success, order_id, message = await checkout_engine.execute_checkout()
+                            last_message = message or last_message
+
+                            if success:
+                                break
+                            else:
+                                if cancel_event.is_set():
+                                    logger.info("Checkout process cancelled by user via Telegram.")
+                                    break
+                                logger.warning(f"⚠️ [AUTO-BUY ATTEMPT {attempt}/{MAX_TRIES} FAILED] Reason: {last_message}")
+                                if attempt < MAX_TRIES:
+                                    logger.info("Retrying auto-buy in 2s...")
+                                    await asyncio.sleep(2)
 
                         if success:
                             logger.info("🎉 Order successfully placed and verified via UPI!")
@@ -199,7 +222,22 @@ async def run_bot():
                             if cancel_event.is_set():
                                 logger.info("Checkout process cancelled by user via Telegram.")
                             else:
-                                logger.error(f"Checkout attempt finished: {message}. Will resume monitoring...")
+                                logger.error(
+                                    f"❌ [AUTO-BUY FAILED AFTER {MAX_TRIES} TRIES]\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"• Product      : {prod_name}\n"
+                                    f"• Substore ID  : {substore_id}\n"
+                                    f"• Pincode      : {pincode}\n"
+                                    f"• Total Tries  : {MAX_TRIES}\n"
+                                    f"• Problem/Error: {last_message}\n"
+                                    f"• Action Taken : Dispatched manual purchase alert with direct link\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                )
+                                await notifier.notify_autobuy_failed_manual(
+                                    product_name=prod_name,
+                                    product_url=target_url,
+                                    reason=last_message
+                                )
                     else:
                         # Auto-buy is PAUSED: Notify-Only Mode
                         logger.info(

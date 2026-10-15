@@ -256,3 +256,39 @@ class TelegramNotifier:
             caption=caption,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+    async def notify_autobuy_failed_manual(
+        self,
+        product_name: str,
+        product_url: str,
+        reason: str
+    ) -> bool:
+        """
+        Alert sent when Auto-Buy fails after 2 attempts.
+        Informs the user that Auto-Buy encountered an issue and advises them to buy manually
+        immediately before stock is depleted, providing a direct 1-tap link.
+        """
+        msg = (
+            f"⚠️ <b>Auto-Buy is not working!</b>\n\n"
+            f"We attempted automated checkout for <b>{product_name}</b> (2 tries), "
+            f"but auto-buy could not complete the purchase.\n\n"
+            f"🔍 <b>What was the problem:</b>\n"
+            f"• <i>{reason}</i>\n\n"
+            f"🛒 <b>Manual Purchase Recommended:</b>\n"
+            f"If you still want to buy this item, please buy it manually right now using the link below before stock sells out!"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("🛒 Buy Manually on Amul Store", url=product_url)
+            ],
+            [
+                InlineKeyboardButton("📊 My Status", callback_data="status"),
+                InlineKeyboardButton("🔔 Switch to Alerts Only", callback_data="switch_notify_only")
+            ]
+        ]
+        return await self.send_message_async(
+            msg,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            disable_web_page_preview=True
+        )
+

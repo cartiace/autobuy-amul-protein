@@ -1018,6 +1018,9 @@ class MultiUserTelegramBot:
     async def dispatch_user_checkout(self, user: User, product_name: str, stock_qty: int, details: Optional[dict] = None):
         """
         Executes isolated checkout for a single user under concurrency control.
+        Retries up to 2 times if auto-buy fails.
+        If both attempts fail, sends a clear notification advising manual purchase
+        with direct product link and logs full audit error details.
         """
         chat_id = user.telegram_chat_id
         cancel_event = asyncio.Event()
@@ -1028,11 +1031,31 @@ class MultiUserTelegramBot:
         async with self.checkout_semaphore:
             logger.info(f"Launching checkout execution for user {chat_id} (Pincode: {user.pincode})...")
             
+            target_prod_name = user.target_name or product_name
+            prod_url = f"https://shop.amul.com/en/product/{user.target_alias}"
+
             # Decrypt user's cookies to temporary in-memory structure
             cookies_list = database.get_user_cookies(chat_id)
             if not cookies_list:
-                logger.error(f"User {chat_id} has no valid session cookies.")
-                await notifier.send_message_async("⚠️ Auto-checkout failed: Session expired. Please send /start to re-link your account.")
+                err_reason = "Amul account not linked or session cookies expired"
+                logger.error(
+                    f"❌ [AUTO-BUY FAILED - NO COOKIES]\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• User Chat ID : {chat_id}\n"
+                    f"• Username     : @{user.telegram_username or 'N/A'}\n"
+                    f"• Phone Number : +91 {user.phone_number or 'Not Linked'}\n"
+                    f"• Pincode      : {user.pincode} ({user.substore_name or 'N/A'})\n"
+                    f"• Target Item  : {target_prod_name} (SKU: {user.target_sku})\n"
+                    f"• Problem/Error: {err_reason}\n"
+                    f"• Action Taken : Dispatched manual purchase alert with direct store link\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                await notifier.notify_autobuy_failed_manual(
+                    product_name=target_prod_name,
+                    product_url=prod_url,
+                    reason=f"{err_reason}. Please use /relogin to connect your account."
+                )
+                self.active_checkouts.pop(chat_id, None)
                 return
 
             # Temporary cookies file in scratch/
@@ -1042,52 +1065,124 @@ class MultiUserTelegramBot:
             with open(user_cookies_path, "w", encoding="utf-8") as f:
                 json.dump(cookies_list, f)
 
+            MAX_TRIES = 2
+            last_error = "Unknown error during auto-checkout"
+
             try:
                 price_val = details.get("price") if details else None
                 amount_str = f"{price_val:,}" if price_val else None
-                target_prod_name = user.target_name or product_name
 
-                checkout = AmulAutoCheckout(
-                    cookies_file=user_cookies_path,
-                    target_url=f"https://shop.amul.com/en/product/{user.target_alias}",
-                    substore_id=user.substore_id,
-                    pincode=user.pincode,
-                    product_name=target_prod_name,
-                    product_amount=amount_str,
-                    headless=True,
-                    quantity=user.quantity,
-                    gateway=self.payment_gateway,
-                    notifier=notifier,
-                    payment_timeout_secs=self.payment_timeout_secs,
-                    cancel_event=cancel_event
-                )
-
+                # Dispatch single initial stock alert
                 await notifier.notify_stock_alert(target_prod_name, stock_qty)
-                success, order_id, msg = await checkout.execute_checkout()
 
-                if success:
-                    # Snooze user auto-buy for configured months post-purchase
-                    pause_days = float(self.post_purchase_pause_months * 30)
-                    paused_until, snooze_reason = database.pause_user_autobuy(
-                        chat_id,
-                        days=pause_days,
-                        reason=f"Auto-snoozed for {self.post_purchase_pause_months} months post-purchase"
-                    )
-                    expiry_str = paused_until.strftime("%d %b %Y, %H:%M UTC")
-
-                    await notifier.notify_order_placed(
-                        order_id=order_id,
-                        details=f"Product: {target_prod_name}\nQuantity: {user.quantity}\nPayment: Verified via UPI",
-                        paused_until_str=expiry_str
-                    )
-                else:
+                for attempt in range(1, MAX_TRIES + 1):
                     if cancel_event.is_set():
-                        logger.info(f"Checkout for user {chat_id} cancelled by user.")
-                    else:
-                        logger.error(f"Checkout for user {chat_id} finished: {msg}")
+                        logger.info(f"Checkout for user {chat_id} was cancelled by user via Telegram command.")
+                        return
+
+                    logger.info(
+                        f"🛒 [AUTO-BUY ATTEMPT {attempt}/{MAX_TRIES}] Initiating checkout for user {chat_id} "
+                        f"(@{user.telegram_username or 'N/A'}, Target: '{target_prod_name}')..."
+                    )
+
+                    try:
+                        checkout = AmulAutoCheckout(
+                            cookies_file=user_cookies_path,
+                            target_url=prod_url,
+                            substore_id=user.substore_id,
+                            pincode=user.pincode,
+                            product_name=target_prod_name,
+                            product_amount=amount_str,
+                            headless=True,
+                            quantity=user.quantity,
+                            gateway=self.payment_gateway,
+                            notifier=notifier,
+                            payment_timeout_secs=self.payment_timeout_secs,
+                            cancel_event=cancel_event
+                        )
+
+                        success, order_id, msg = await checkout.execute_checkout()
+                        last_error = msg or last_error
+
+                        if success:
+                            # Snooze user auto-buy for configured months post-purchase
+                            pause_days = float(self.post_purchase_pause_months * 30)
+                            paused_until, snooze_reason = database.pause_user_autobuy(
+                                chat_id,
+                                days=pause_days,
+                                reason=f"Auto-snoozed for {self.post_purchase_pause_months} months post-purchase"
+                            )
+                            expiry_str = paused_until.strftime("%d %b %Y, %H:%M UTC")
+
+                            await notifier.notify_order_placed(
+                                order_id=order_id,
+                                details=f"Product: {target_prod_name}\nQuantity: {user.quantity}\nPayment: Verified via UPI",
+                                paused_until_str=expiry_str
+                            )
+                            logger.info(f"🎉 Auto-buy succeeded on attempt {attempt} for user {chat_id}! Order ID: {order_id}")
+                            return
+                        else:
+                            if cancel_event.is_set():
+                                logger.info(f"Checkout for user {chat_id} cancelled by user on attempt {attempt}.")
+                                return
+
+                            logger.warning(
+                                f"⚠️ [AUTO-BUY ATTEMPT {attempt}/{MAX_TRIES} FAILED] User {chat_id} "
+                                f"(@{user.telegram_username or 'N/A'}). Problem: {last_error}"
+                            )
+
+                            if attempt < MAX_TRIES:
+                                logger.info(f"Retrying auto-buy in 2s (Attempt {attempt + 1}/{MAX_TRIES})...")
+                                await asyncio.sleep(2)
+
+                    except Exception as attempt_exc:
+                        last_error = str(attempt_exc)
+                        logger.error(
+                            f"⚠️ Exception during auto-buy attempt {attempt}/{MAX_TRIES} for user {chat_id}: {attempt_exc}",
+                            exc_info=True
+                        )
+                        if attempt < MAX_TRIES and not cancel_event.is_set():
+                            await asyncio.sleep(2)
+
+                # Both attempts failed without user cancellation
+                if not cancel_event.is_set():
+                    logger.error(
+                        f"❌ [AUTO-BUY FAILED AFTER {MAX_TRIES} TRIES]\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"• User Chat ID : {chat_id}\n"
+                        f"• Username     : @{user.telegram_username or 'N/A'}\n"
+                        f"• Phone Number : +91 {user.phone_number or 'Not Linked'}\n"
+                        f"• Pincode      : {user.pincode} ({user.substore_name or 'N/A'}, ID: {user.substore_id})\n"
+                        f"• Target Item  : {target_prod_name} (SKU: {user.target_sku})\n"
+                        f"• Total Tries  : {MAX_TRIES}\n"
+                        f"• Problem/Error: {last_error}\n"
+                        f"• Action Taken : Dispatched manual purchase alert with direct link to user\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    )
+
+                    await notifier.notify_autobuy_failed_manual(
+                        product_name=target_prod_name,
+                        product_url=prod_url,
+                        reason=last_error
+                    )
+
+                    if self.admin_chat_id and str(chat_id) != str(self.admin_chat_id):
+                        try:
+                            admin_notifier = TelegramNotifier(token=self.token, chat_id=self.admin_chat_id)
+                            admin_msg = (
+                                f"⚠️ <b>Auto-Buy Failure Alert (2 Tries Failed):</b>\n"
+                                f"• User: @{user.telegram_username or 'N/A'} (<code>{chat_id}</code>)\n"
+                                f"• Pincode: <code>{user.pincode}</code> | Phone: +91 {user.phone_number or 'N/A'}\n"
+                                f"• Warehouse: {user.substore_name or 'N/A'}\n"
+                                f"• Product: <b>{target_prod_name}</b>\n"
+                                f"• <b>Problem:</b> <i>{last_error}</i>"
+                            )
+                            await admin_notifier.send_message_async(admin_msg)
+                        except Exception as admin_err:
+                            logger.warning(f"Could not dispatch admin auto-buy failure alert: {admin_err}")
 
             except Exception as e:
-                logger.error(f"Error during user {chat_id} checkout: {e}", exc_info=True)
+                logger.error(f"Error during user {chat_id} checkout lifecycle: {e}", exc_info=True)
             finally:
                 if os.path.exists(user_cookies_path):
                     os.remove(user_cookies_path)
