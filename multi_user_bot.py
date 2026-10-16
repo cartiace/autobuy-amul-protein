@@ -760,6 +760,8 @@ class MultiUserTelegramBot:
                 success, cookies, msg = await auth_manager.verify_otp(chat_id, otp_digits)
                 if success and cookies:
                     database.set_user_cookies(chat_id, cookies)
+                    database.resume_user_autobuy(chat_id)
+                    database.mark_user_stock_notified(chat_id, False)
                     u = database.get_user(chat_id)
                     target_name = u.target_name or "Amul Chocolate Whey Protein (60 sachets)"
                     congrats_msg = (
@@ -1006,6 +1008,14 @@ class MultiUserTelegramBot:
                 await query.edit_message_text("❌ <b>Purchase Cancelled!</b> Session aborted.")
             else:
                 await query.edit_message_text("ℹ️ No active checkout session.")
+        elif data == "relogin":
+            database.set_user_onboarding_state(chat_id, "AWAITING_PHONE")
+            await query.message.reply_text(
+                "📱 <b>Amul Account Re-Login</b>\n\n"
+                "Please reply with your <b>10-digit registered Amul Mobile Number</b> (e.g. <code>9876543210</code>):\n\n"
+                "Amul will send you an official SMS OTP to verify.",
+                parse_mode="HTML"
+            )
         elif data == "change_product":
             target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
             msg = (
@@ -1272,6 +1282,16 @@ class MultiUserTelegramBot:
                                 f"(@{user.telegram_username or 'N/A'}). Problem: {last_error}"
                             )
 
+                            is_session_expired = (
+                                "session expired" in (last_error or "").lower()
+                                or "login required" in (last_error or "").lower()
+                            )
+                            if is_session_expired:
+                                logger.warning(
+                                    f"Amul session expired for user {chat_id}. Aborting attempt {attempt}/{MAX_TRIES} without further retry."
+                                )
+                                break
+
                             if attempt < MAX_TRIES:
                                 logger.info(f"Retrying auto-buy in 2s (Attempt {attempt + 1}/{MAX_TRIES})...")
                                 await asyncio.sleep(2)
@@ -1285,21 +1305,33 @@ class MultiUserTelegramBot:
                         if attempt < MAX_TRIES and not cancel_event.is_set():
                             await asyncio.sleep(2)
 
-                # Both attempts failed without user cancellation
+                # Attempts failed without user cancellation
                 if not cancel_event.is_set():
+                    is_session_expired = (
+                        "session expired" in (last_error or "").lower()
+                        or "login required" in (last_error or "").lower()
+                    )
+
                     logger.error(
-                        f"❌ [AUTO-BUY FAILED AFTER {MAX_TRIES} TRIES]\n"
+                        f"❌ [AUTO-BUY FAILED]\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"• User Chat ID : {chat_id}\n"
                         f"• Username     : @{user.telegram_username or 'N/A'}\n"
                         f"• Phone Number : +91 {user.phone_number or 'Not Linked'}\n"
                         f"• Pincode      : {user.pincode} ({user.substore_name or 'N/A'}, ID: {user.substore_id})\n"
                         f"• Target Item  : {target_prod_name} (SKU: {user.target_sku})\n"
-                        f"• Total Tries  : {MAX_TRIES}\n"
                         f"• Problem/Error: {last_error}\n"
-                        f"• Action Taken : Dispatched manual purchase alert with direct link to user\n"
+                        f"• Action Taken : Dispatched failure alert with manual purchase link\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     )
+
+                    # If session expired, pause auto-buy so user is prompted to relogin
+                    if is_session_expired:
+                        database.pause_user_autobuy(
+                            chat_id,
+                            days=None,
+                            reason="Amul session expired (Login required)"
+                        )
 
                     await notifier.notify_autobuy_failed_manual(
                         product_name=target_prod_name,
@@ -1311,7 +1343,7 @@ class MultiUserTelegramBot:
                         try:
                             admin_notifier = TelegramNotifier(token=self.token, chat_id=self.admin_chat_id)
                             admin_msg = (
-                                f"⚠️ <b>Auto-Buy Failure Alert (2 Tries Failed):</b>\n"
+                                f"⚠️ <b>Auto-Buy Failure Alert:</b>\n"
                                 f"• User: @{user.telegram_username or 'N/A'} (<code>{chat_id}</code>)\n"
                                 f"• Pincode: <code>{user.pincode}</code> | Phone: +91 {user.phone_number or 'N/A'}\n"
                                 f"• Warehouse: {user.substore_name or 'N/A'}\n"

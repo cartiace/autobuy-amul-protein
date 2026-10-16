@@ -103,7 +103,12 @@ class TelegramNotifier:
     def is_configured(self) -> bool:
         return bool(self.token and self.chat_id)
 
-    async def send_message_async(self, message: str, reply_markup: Optional[Any] = None) -> bool:
+    async def send_message_async(
+        self,
+        message: str,
+        reply_markup: Optional[Any] = None,
+        disable_web_page_preview: bool = False
+    ) -> bool:
         """Sends a telegram message asynchronously with optional inline keyboard."""
         if not self.is_configured():
             logger.warning("Telegram Bot Token or Chat ID not configured. Skipping notification.")
@@ -112,29 +117,47 @@ class TelegramNotifier:
         # Attempt 1: Using python-telegram-bot
         if self._bot:
             try:
-                await self._bot.send_message(
-                    chat_id=self.chat_id,
-                    text=message,
-                    parse_mode="HTML",
-                    reply_markup=reply_markup
-                )
+                kwargs = {
+                    "chat_id": self.chat_id,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "reply_markup": reply_markup
+                }
+                if disable_web_page_preview:
+                    try:
+                        import telegram
+                        kwargs["link_preview_options"] = telegram.LinkPreviewOptions(is_disabled=True)
+                    except Exception:
+                        kwargs["disable_web_page_preview"] = True
+
+                await self._bot.send_message(**kwargs)
                 logger.info("Telegram notification sent successfully (via python-telegram-bot).")
                 return True
             except Exception as e:
                 logger.warning(f"python-telegram-bot send_message failed: {e}. Retrying via HTTP API...")
 
         # Attempt 2: Fallback via direct HTTP POST
-        return self._send_http(message, reply_markup)
+        return self._send_http(message, reply_markup, disable_web_page_preview=disable_web_page_preview)
 
-    def send_message_sync(self, message: str, reply_markup: Optional[Any] = None) -> bool:
+    def send_message_sync(
+        self,
+        message: str,
+        reply_markup: Optional[Any] = None,
+        disable_web_page_preview: bool = False
+    ) -> bool:
         """Sends a telegram message synchronously."""
         if not self.is_configured():
             logger.warning("Telegram Bot Token or Chat ID not configured. Skipping notification.")
             return False
 
-        return self._send_http(message, reply_markup)
+        return self._send_http(message, reply_markup, disable_web_page_preview=disable_web_page_preview)
 
-    def _send_http(self, message: str, reply_markup: Optional[Any] = None) -> bool:
+    def _send_http(
+        self,
+        message: str,
+        reply_markup: Optional[Any] = None,
+        disable_web_page_preview: bool = False
+    ) -> bool:
         """Sends message via direct Telegram HTTP Bot API."""
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {
@@ -142,6 +165,8 @@ class TelegramNotifier:
             "text": message,
             "parse_mode": "HTML"
         }
+        if disable_web_page_preview:
+            payload["disable_web_page_preview"] = True
         if reply_markup and hasattr(reply_markup, "to_dict"):
             payload["reply_markup"] = reply_markup.to_dict()
 
@@ -351,29 +376,46 @@ class TelegramNotifier:
         product_url: str,
         reason: str
     ) -> bool:
-        """
-        Alert sent when Auto-Buy fails after 2 attempts.
-        Informs the user that Auto-Buy encountered an issue and advises them to buy manually
-        immediately before stock is depleted, providing a direct 1-tap link.
-        """
+        is_session_expired = (
+            "session expired" in (reason or "").lower()
+            or "login required" in (reason or "").lower()
+        )
+
+        if is_session_expired:
+            guidance = (
+                "🔑 <b>Action Required:</b> Your Amul login session has expired on StoreHippo.\n"
+                "Please tap <b>🔑 Re-login to Amul</b> below to re-enter your mobile number & OTP so Auto-Buy can work next time.\n\n"
+                "🛒 <b>In the meantime:</b> You can still buy this restock manually before it sells out using the store link below!"
+            )
+        else:
+            guidance = (
+                "🛒 <b>Manual Purchase Recommended:</b>\n"
+                "If you still want to buy this item, please buy it manually right now using the link below before stock sells out!"
+            )
+
         msg = (
             f"⚠️ <b>Auto-Buy is not working!</b>\n\n"
-            f"We attempted automated checkout for <b>{product_name}</b> (2 tries), "
+            f"We attempted automated checkout for <b>{product_name}</b>, "
             f"but auto-buy could not complete the purchase.\n\n"
             f"🔍 <b>What was the problem:</b>\n"
             f"• <i>{reason}</i>\n\n"
-            f"🛒 <b>Manual Purchase Recommended:</b>\n"
-            f"If you still want to buy this item, please buy it manually right now using the link below before stock sells out!"
+            f"{guidance}"
         )
         keyboard = [
             [
                 InlineKeyboardButton("🛒 Buy Manually on Amul Store", url=product_url)
-            ],
-            [
-                InlineKeyboardButton("📊 My Status", callback_data="status"),
-                InlineKeyboardButton("🔔 Switch to Alerts Only", callback_data="switch_notify_only")
             ]
         ]
+        if is_session_expired:
+            keyboard.append([
+                InlineKeyboardButton("🔑 Re-login to Amul", callback_data="relogin")
+            ])
+
+        keyboard.append([
+            InlineKeyboardButton("📊 My Status", callback_data="status"),
+            InlineKeyboardButton("🔔 Switch to Alerts Only", callback_data="switch_notify_only")
+        ])
+
         return await self.send_message_async(
             msg,
             reply_markup=InlineKeyboardMarkup(keyboard),

@@ -375,6 +375,19 @@ class AmulAutoCheckout:
 
                 await page.screenshot(path=os.path.join(self.screenshots_dir, "03_checkout_page.png"))
 
+                # Check for session expiry / login requirement
+                login_required = await self._is_login_required(page)
+                if login_required:
+                    error_msg = "Amul session expired (Login required). Please use /relogin to connect your account."
+                    logger.error(f"❌ {error_msg}")
+                    await page.screenshot(path=os.path.join(self.screenshots_dir, "error_session_expired.png"))
+                    try:
+                        await self._empty_cart_page(page)
+                    except Exception:
+                        pass
+                    await browser.close()
+                    return False, None, error_msg
+
                 # 4. Handle Address Selection
                 if self.cancel_event and self.cancel_event.is_set():
                     await self._empty_cart_page(page)
@@ -425,6 +438,38 @@ class AmulAutoCheckout:
                         pass
                 await browser.close()
                 return False, None, str(e)
+
+    async def _is_login_required(self, page: Page) -> bool:
+        """
+        Checks if StoreHippo is gating checkout behind login / Send OTP,
+        indicating that the user's authenticated session cookies have expired.
+        """
+        try:
+            # 1. Direct DOM check for 'Send OTP' button or contact info form
+            send_otp_btn = page.locator('button:has-text("Send OTP"), input[value="Send OTP"], a:has-text("Send OTP")')
+            if await send_otp_btn.count() > 0 and await send_otp_btn.first.is_visible():
+                logger.warning("Detected 'Send OTP' button on checkout page — user session is expired or not logged in.")
+                return True
+
+            # 2. Check StoreHippo ms.user state and DOM indicators
+            is_logged_out = await page.evaluate("""() => {
+                const user = (window.ms && window.ms.user) ? window.ms.user : null;
+                const hasAuthUser = !!(user && (user._id || user.phone || user.email));
+                const hasPhoneInput = !!document.querySelector('input[placeholder*="81234"], input[type="tel"]');
+                const hasContactInfoText = document.body && document.body.innerText.includes('Contact information');
+                const hasSendOtpText = Array.from(document.querySelectorAll('button, a')).some(el => (el.innerText || '').includes('Send OTP'));
+
+                return (!hasAuthUser && (hasPhoneInput || hasContactInfoText || hasSendOtpText));
+            }""")
+
+            if is_logged_out:
+                logger.warning("StoreHippo ms.user is unauthenticated on checkout page.")
+                return True
+
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking login status on checkout page: {e}")
+            return False
 
     async def _add_item_to_cart(self, page: Page) -> bool:
         """Adds product to cart via UI button or client API."""
