@@ -39,7 +39,7 @@ from product_catalog import (
     resolve_amul_product,
     extract_alias_from_url
 )
-from morning_messages import get_loving_morning_message
+from morning_messages import get_loving_morning_message, parse_time_string, format_time_12h
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -139,6 +139,31 @@ class MultiUserTelegramBot:
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
+
+    def _get_gm_time_keyboard(self) -> InlineKeyboardMarkup:
+        keyboard = [
+            [
+                InlineKeyboardButton("🌅 6:00 AM", callback_data="gm_set_time_06:00"),
+                InlineKeyboardButton("🌅 6:30 AM", callback_data="gm_set_time_06:30"),
+                InlineKeyboardButton("☀️ 7:00 AM", callback_data="gm_set_time_07:00"),
+            ],
+            [
+                InlineKeyboardButton("☀️ 7:30 AM", callback_data="gm_set_time_07:30"),
+                InlineKeyboardButton("☀️ 8:00 AM (Default)", callback_data="gm_set_time_08:00"),
+                InlineKeyboardButton("☀️ 8:30 AM", callback_data="gm_set_time_08:30"),
+            ],
+            [
+                InlineKeyboardButton("☕ 9:00 AM", callback_data="gm_set_time_09:00"),
+                InlineKeyboardButton("☕ 9:30 AM", callback_data="gm_set_time_09:30"),
+                InlineKeyboardButton("🥞 10:00 AM", callback_data="gm_set_time_10:00"),
+            ],
+            [
+                InlineKeyboardButton("✍️ Custom Time", callback_data="gm_custom_time"),
+                InlineKeyboardButton("🔙 Back", callback_data="gm_status"),
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
@@ -295,7 +320,8 @@ class MultiUserTelegramBot:
 
         prod_url = f"https://shop.amul.com/en/product/{user.target_alias}" if user.target_alias else None
         prod_link_str = f"🔗 <b>Product Link:</b> <a href='{prod_url}'>View on Amul Store</a>\n" if prod_url else ""
-        gm_str = "💖 <b>Good Morning Service:</b> 🌸 Active (Daily 8:00 AM IST)\n" if getattr(user, "good_morning_enabled", False) else ""
+        user_time_disp = format_time_12h(getattr(user, "morning_time", None) or "08:00")
+        gm_str = f"💖 <b>Good Morning Service:</b> 🌸 Active (Daily at {user_time_disp} IST)\n" if getattr(user, "good_morning_enabled", False) else ""
 
         msg = (
             f"📊 <b>Your Personal Status Report</b>\n\n"
@@ -588,7 +614,8 @@ class MultiUserTelegramBot:
                 phone_str = f"+91 {u.phone_number}" if u.phone_number else "No Phone"
                 pincode_str = u.pincode or "N/A"
                 warehouse_str = u.substore_name or "N/A"
-                gm_tag = " | 💖 <i>GM 8am</i>" if getattr(u, "good_morning_enabled", False) else ""
+                gm_time = format_time_12h(getattr(u, "morning_time", None) or "08:00")
+                gm_tag = f" | 💖 <i>GM {gm_time}</i>" if getattr(u, "good_morning_enabled", False) else ""
 
                 lines.append(
                     f"{i}. {stat_emoji} <b>{user_tag}</b> (<code>{u.telegram_chat_id}</code>){gm_tag}\n"
@@ -634,12 +661,46 @@ class MultiUserTelegramBot:
             ])
             await update.message.reply_text(
                 "💔 <b>Good Morning Service Disabled</b>\n\n"
-                "You won't receive morning messages anymore at 8:00 AM.\n"
+                "You won't receive morning messages anymore.\n"
                 "Whenever you miss them, you can turn it back on anytime with <code>/goodmorning</code> or tap below!",
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
             return
+
+        # Check if user passed time directly e.g. /goodmorning 7:30 am or /goodmorning time 8am
+        if args:
+            raw_time_query = " ".join(args[1:]) if args[0].lower() in ["time", "at", "set"] else " ".join(args)
+            parsed = parse_time_string(raw_time_query)
+            if parsed:
+                hh_mm, display_12h = parsed
+                database.set_user_morning_time(chat_id, hh_mm)
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")],
+                    [InlineKeyboardButton("⏰ Change Time", callback_data="gm_change_time")],
+                    [InlineKeyboardButton("❌ Turn Off Service", callback_data="gm_turn_off")]
+                ])
+                await update.message.reply_text(
+                    f"💖 <b>Good Morning Time Saved!</b> ☀️🥰\n\n"
+                    f"⏰ <b>Scheduled Time:</b> Every day at <b>{display_12h} IST</b>\n"
+                    f"💌 <b>What to expect:</b> Your loving girlfriend will message you right at {display_12h} every morning! 🌸✨\n\n"
+                    f"Want one right this second? Send <code>/goodmorningnow</code> or tap below! 👇",
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+                return
+            else:
+                await update.message.reply_text(
+                    f"⚠️ <i>Could not recognize the time '{raw_time_query}'.</i>\n\n"
+                    f"Please try formats like:\n"
+                    f"• <code>/goodmorning 7:30 am</code>\n"
+                    f"• <code>/goodmorning 08:00</code>\n"
+                    f"• <code>/goodmorning 9am</code>\n\n"
+                    f"Or choose a preset below:",
+                    parse_mode="HTML",
+                    reply_markup=self._get_gm_time_keyboard()
+                )
+                return
 
         user = database.get_user(chat_id)
         if not user:
@@ -649,23 +710,29 @@ class MultiUserTelegramBot:
         if not is_already_enabled:
             database.set_user_good_morning(chat_id, True)
 
+        user_time = getattr(user, "morning_time", None) or "08:00"
+        display_12h = format_time_12h(user_time)
+
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")],
+            [InlineKeyboardButton("⏰ Change Delivery Time", callback_data="gm_change_time")],
             [InlineKeyboardButton("❌ Turn Off Service", callback_data="gm_turn_off")]
         ])
 
         if is_already_enabled:
             status_text = (
-                "🌸 <b>Secret Good Morning Service is ACTIVE!</b> 🥰\n\n"
-                "⏰ <b>Scheduled Time:</b> Every day at <b>8:00 AM IST</b>\n"
-                "💌 <b>What to expect:</b> A sweet, warm, caring good morning message from your loving girlfriend to start your morning right! 💕✨\n\n"
-                "Want one right this second? Send <code>/goodmorningnow</code> or tap below! 👇"
+                f"🌸 <b>Secret Good Morning Service is ACTIVE!</b> 🥰\n\n"
+                f"⏰ <b>Delivery Time:</b> Every day at <b>{display_12h} IST</b>\n"
+                f"💌 <b>What to expect:</b> A sweet, warm, caring good morning message from your loving girlfriend to start your morning right! 💕✨\n\n"
+                f"Want to change the delivery time? Tap <b>⏰ Change Delivery Time</b> below.\n"
+                f"Want one right this second? Send <code>/goodmorningnow</code> or tap below! 👇"
             )
         else:
             status_text = (
-                "💖 <b>Secret Good Morning Service Activated!</b> ☀️🥰\n\n"
-                "Starting tomorrow morning, you will receive a loving, sweet, and caring good morning message from your girlfriend every day at <b>8:00 AM IST</b>! 🌸✨\n\n"
-                "Can't wait until 8 AM? Send <code>/goodmorningnow</code> or tap below to receive one right now! 👇"
+                f"💖 <b>Secret Good Morning Service Activated!</b> ☀️🥰\n\n"
+                f"Starting tomorrow morning, you will receive a loving, sweet, and caring good morning message every day at <b>{display_12h} IST</b>! 🌸✨\n\n"
+                f"You can customize your delivery time anytime via <b>⏰ Change Delivery Time</b> below.\n\n"
+                f"Can't wait until then? Send <code>/goodmorningnow</code> or tap below to receive one right now! 👇"
             )
 
         await update.message.reply_text(status_text, parse_mode="HTML", reply_markup=keyboard)
@@ -677,16 +744,49 @@ class MultiUserTelegramBot:
         msg = get_loving_morning_message(name)
 
         is_enabled = bool(getattr(user, "good_morning_enabled", False)) if user else False
+        user_time = getattr(user, "morning_time", None) or "08:00"
+        display_12h = format_time_12h(user_time)
+
         buttons = [
-            [InlineKeyboardButton("💌 Another One!", callback_data="gm_send_now")]
+            [InlineKeyboardButton("💌 Another One!", callback_data="gm_send_now")],
+            [InlineKeyboardButton("⏰ Change Daily Time", callback_data="gm_change_time")]
         ]
         if not is_enabled:
-            buttons.append([InlineKeyboardButton("☀️ Enable Daily at 8:00 AM", callback_data="gm_turn_on")])
+            buttons.append([InlineKeyboardButton(f"☀️ Enable Daily ({display_12h})", callback_data="gm_turn_on")])
         else:
-            buttons.append([InlineKeyboardButton("❌ Turn Off Daily 8 AM", callback_data="gm_turn_off")])
+            buttons.append([InlineKeyboardButton("❌ Turn Off Daily", callback_data="gm_turn_off")])
 
         keyboard = InlineKeyboardMarkup(buttons)
         await update.message.reply_text(msg, reply_markup=keyboard)
+
+    async def cmd_gm_time(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        args = context.args or []
+        if args:
+            raw_time_query = " ".join(args)
+            parsed = parse_time_string(raw_time_query)
+            if parsed:
+                hh_mm, display_12h = parsed
+                database.set_user_morning_time(chat_id, hh_mm)
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")],
+                    [InlineKeyboardButton("⏰ Change Time", callback_data="gm_change_time")],
+                    [InlineKeyboardButton("❌ Turn Off Service", callback_data="gm_turn_off")]
+                ])
+                await update.message.reply_text(
+                    f"💖 <b>Good Morning Time Saved!</b> ☀️🥰\n\n"
+                    f"⏰ <b>Scheduled Time:</b> Every day at <b>{display_12h} IST</b>\n"
+                    f"Your loving girlfriend will message you right at {display_12h} every morning! 🌸✨",
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+                return
+        await update.message.reply_text(
+            "⏰ <b>Choose Your Good Morning Delivery Time (IST)</b>\n\n"
+            "Pick a preset or tap ✍️ <b>Custom Time</b> to enter any time:",
+            parse_mode="HTML",
+            reply_markup=self._get_gm_time_keyboard()
+        )
 
     async def cmd_gm_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
@@ -704,17 +804,18 @@ class MultiUserTelegramBot:
 
         lines = [
             f"💖 <b>Admin: Good Morning Service Subscribers</b>",
-            f"👥 <b>Total Subscribers:</b> {len(gm_users)} (Scheduled daily at 8:00 AM IST)\n"
+            f"👥 <b>Total Subscribers:</b> {len(gm_users)} (Custom Scheduled Delivery Times IST)\n"
         ]
 
         for i, u in enumerate(gm_users, 1):
             user_tag = f"@{u.telegram_username}" if u.telegram_username else f"User {u.telegram_chat_id}"
             phone_str = f"+91 {u.phone_number}" if u.phone_number else "No Phone"
             last_sent = u.last_morning_msg_date or "Never"
+            sched_time = format_time_12h(getattr(u, "morning_time", None) or "08:00")
             lines.append(
                 f"{i}. 🌸 <b>{user_tag}</b> (<code>{u.telegram_chat_id}</code>)\n"
                 f"   📱 {phone_str} | 📍 <code>{u.pincode or 'N/A'}</code> ({u.substore_name or 'N/A'})\n"
-                f"   📅 Last Sent: <b>{last_sent}</b>\n"
+                f"   ⏰ Time: <b>{sched_time} IST</b> | 📅 Last Sent: <b>{last_sent}</b>\n"
             )
 
         full_msg = "\n".join(lines)
@@ -732,6 +833,37 @@ class MultiUserTelegramBot:
 
         if not user:
             user = database.get_or_create_user(chat_id, update.effective_user.username)
+
+        # State: Awaiting Custom Good Morning Time Input
+        if user.onboarding_state == "AWAITING_GM_TIME":
+            parsed = parse_time_string(text)
+            if parsed:
+                hh_mm, display_12h = parsed
+                database.set_user_morning_time(chat_id, hh_mm)
+                database.set_user_onboarding_state(chat_id, "READY")
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")],
+                    [InlineKeyboardButton("⏰ Change Time", callback_data="gm_change_time")],
+                    [InlineKeyboardButton("❌ Turn Off Service", callback_data="gm_turn_off")]
+                ])
+                await update.message.reply_text(
+                    f"💖 <b>Good Morning Time Saved!</b> ☀️🥰\n\n"
+                    f"⏰ <b>Scheduled Time:</b> Every day at <b>{display_12h} IST</b>\n"
+                    f"💌 <b>What to expect:</b> Your loving girlfriend will message you right at {display_12h} every morning! 🌸✨\n\n"
+                    f"Want one right this second? Send <code>/goodmorningnow</code> or tap below! 👇",
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+                return
+            else:
+                await update.message.reply_text(
+                    f"⚠️ <i>Could not recognize '{text}' as a valid time.</i>\n\n"
+                    f"Please send a time like <code>7:15 am</code>, <code>08:30</code>, or <code>9am</code>.\n\n"
+                    f"Or tap below to choose a quick preset:",
+                    parse_mode="HTML",
+                    reply_markup=self._get_gm_time_keyboard()
+                )
+                return
 
         # State 1: Awaiting Pincode (New User Onboarding)
         if user.onboarding_state == "AWAITING_PINCODE":
@@ -1291,13 +1423,16 @@ class MultiUserTelegramBot:
             name = (user.telegram_username if user and user.telegram_username else None) or (query.from_user.first_name if query.from_user else None)
             msg = get_loving_morning_message(name)
             is_enabled = bool(getattr(user, "good_morning_enabled", False)) if user else False
+            user_time = getattr(user, "morning_time", None) or "08:00"
+            display_12h = format_time_12h(user_time)
             buttons = [
-                [InlineKeyboardButton("💌 Another One!", callback_data="gm_send_now")]
+                [InlineKeyboardButton("💌 Another One!", callback_data="gm_send_now")],
+                [InlineKeyboardButton("⏰ Change Daily Time", callback_data="gm_change_time")]
             ]
             if not is_enabled:
-                buttons.append([InlineKeyboardButton("☀️ Enable Daily at 8:00 AM", callback_data="gm_turn_on")])
+                buttons.append([InlineKeyboardButton(f"☀️ Enable Daily ({display_12h})", callback_data="gm_turn_on")])
             else:
-                buttons.append([InlineKeyboardButton("❌ Turn Off Daily 8 AM", callback_data="gm_turn_off")])
+                buttons.append([InlineKeyboardButton("❌ Turn Off Daily", callback_data="gm_turn_off")])
             keyboard = InlineKeyboardMarkup(buttons)
             await query.message.reply_text(msg, reply_markup=keyboard)
 
@@ -1309,7 +1444,7 @@ class MultiUserTelegramBot:
             ])
             await query.edit_message_text(
                 "💔 <b>Good Morning Service Disabled</b>\n\n"
-                "You won't receive morning messages at 8:00 AM anymore.\n"
+                "You won't receive morning messages anymore.\n"
                 "Tap below or send <code>/goodmorning</code> whenever you want to re-enable it!",
                 parse_mode="HTML",
                 reply_markup=keyboard
@@ -1317,14 +1452,78 @@ class MultiUserTelegramBot:
 
         elif data == "gm_turn_on":
             database.set_user_good_morning(chat_id, True)
+            user_time = getattr(user, "morning_time", None) or "08:00"
+            display_12h = format_time_12h(user_time)
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")],
+                [InlineKeyboardButton("⏰ Change Time", callback_data="gm_change_time")],
                 [InlineKeyboardButton("❌ Turn Off Service", callback_data="gm_turn_off")]
             ])
             await query.edit_message_text(
-                "💖 <b>Secret Good Morning Service Activated!</b> ☀️🥰\n\n"
-                "You're all set! You will receive sweet and loving good morning messages every day at <b>8:00 AM IST</b>! 🌸✨\n\n"
-                "Tap below if you want one right now! 👇",
+                f"💖 <b>Secret Good Morning Service Activated!</b> ☀️🥰\n\n"
+                f"You're all set! You will receive sweet and loving good morning messages every day at <b>{display_12h} IST</b>! 🌸✨\n\n"
+                f"Tap below if you want one right now! 👇",
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+
+        elif data == "gm_change_time":
+            await query.edit_message_text(
+                "⏰ <b>Choose Your Good Morning Delivery Time (IST)</b>\n\n"
+                "Pick a convenient morning time preset or choose ✍️ <b>Custom Time</b>:",
+                parse_mode="HTML",
+                reply_markup=self._get_gm_time_keyboard()
+            )
+
+        elif data.startswith("gm_set_time_"):
+            time_str = data.replace("gm_set_time_", "")
+            database.set_user_morning_time(chat_id, time_str)
+            display_12h = format_time_12h(time_str)
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")],
+                [InlineKeyboardButton("⏰ Change Time", callback_data="gm_change_time")],
+                [InlineKeyboardButton("❌ Turn Off Service", callback_data="gm_turn_off")]
+            ])
+            await query.edit_message_text(
+                f"💖 <b>Good Morning Time Saved!</b> ☀️🥰\n\n"
+                f"⏰ <b>Scheduled Time:</b> Every day at <b>{display_12h} IST</b>\n"
+                f"Your loving girlfriend will message you right at {display_12h} every morning! 🌸✨\n\n"
+                f"Want one right this second? Send <code>/goodmorningnow</code> or tap below! 👇",
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+
+        elif data == "gm_custom_time":
+            database.set_user_onboarding_state(chat_id, "AWAITING_GM_TIME")
+            back_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Cancel / Back", callback_data="gm_status")]
+            ])
+            await query.edit_message_text(
+                "✍️ <b>Set Your Custom Good Morning Time (IST)</b>\n\n"
+                "Please reply with the exact time you'd like your message, for example:\n"
+                "• <code>7:15 am</code>\n"
+                "• <code>08:45</code>\n"
+                "• <code>6:45 AM</code>\n"
+                "• <code>9am</code>\n\n"
+                "<i>Just type the time in chat!</i>",
+                parse_mode="HTML",
+                reply_markup=back_kb
+            )
+
+        elif data == "gm_status":
+            user_time = getattr(user, "morning_time", None) or "08:00"
+            display_12h = format_time_12h(user_time)
+            is_enabled = bool(getattr(user, "good_morning_enabled", False))
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")],
+                [InlineKeyboardButton("⏰ Change Delivery Time", callback_data="gm_change_time")],
+                [InlineKeyboardButton("❌ Turn Off Service", callback_data="gm_turn_off")] if is_enabled else [InlineKeyboardButton("☀️ Enable Service", callback_data="gm_turn_on")]
+            ])
+            await query.edit_message_text(
+                f"🌸 <b>Secret Good Morning Service Dashboard</b> 🥰\n\n"
+                f"⏰ <b>Delivery Time:</b> Every day at <b>{display_12h} IST</b>\n"
+                f"⚙️ <b>Status:</b> {'🟢 <b>ACTIVE</b>' if is_enabled else '⏸️ <b>PAUSED</b>'}\n"
+                f"💌 <b>What to expect:</b> A sweet, warm, caring message from your loving girlfriend! 💕✨",
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
@@ -1589,18 +1788,25 @@ class MultiUserTelegramBot:
     async def _morning_scheduler_loop(self):
         """
         Background scheduler running 24/7.
-        Every morning at 8:00 AM IST, dispatches a sweet and loving girlfriend good morning
-        message to all subscribed users. Guarantees exactly one message per subscriber per day.
+        Dispatches a sweet and loving girlfriend good morning message to all subscribed users
+        at their customized scheduled time (IST). Guarantees exactly one message per subscriber per day.
         """
-        logger.info("Good Morning Scheduler loop started (checks every 30s for 8:00 AM IST).")
+        logger.info("Good Morning Scheduler loop started (checks every 30s for scheduled times IST).")
         while True:
             try:
                 now_ist = datetime.now(IST)
-                if now_ist.hour == 8:
-                    today_str = now_ist.strftime("%Y-%m-%d")
-                    subscribers = database.get_good_morning_users()
-                    for u in subscribers:
-                        if u.last_morning_msg_date != today_str:
+                today_str = now_ist.strftime("%Y-%m-%d")
+                subscribers = database.get_good_morning_users()
+                for u in subscribers:
+                    if u.last_morning_msg_date == today_str:
+                        continue
+                    user_time = getattr(u, "morning_time", None) or "08:00"
+                    try:
+                        th, tm = map(int, user_time.split(":"))
+                        target_dt = now_ist.replace(hour=th, minute=tm, second=0, microsecond=0)
+                        diff_secs = (now_ist - target_dt).total_seconds()
+                        # Deliver if current time is within 0 to 900 seconds (15 minutes) after target_dt
+                        if 0 <= diff_secs <= 900:
                             chat_id = u.telegram_chat_id
                             name = u.telegram_username
                             msg = get_loving_morning_message(name)
@@ -1608,16 +1814,19 @@ class MultiUserTelegramBot:
                                 notifier = TelegramNotifier(token=self.token, chat_id=str(chat_id))
                                 keyboard = InlineKeyboardMarkup([
                                     [InlineKeyboardButton("💌 Another One!", callback_data="gm_send_now")],
+                                    [InlineKeyboardButton("⏰ Change Time", callback_data="gm_change_time")],
                                     [InlineKeyboardButton("❌ Turn Off", callback_data="gm_turn_off")]
                                 ])
                                 success = await notifier.send_message_async(msg, reply_markup=keyboard)
                                 if success:
                                     database.record_user_morning_sent(chat_id, today_str)
-                                    logger.info(f"Delivered 8:00 AM Good Morning message to user {chat_id} (@{u.telegram_username})")
+                                    logger.info(f"Delivered Good Morning message to user {chat_id} (@{u.telegram_username}) scheduled at {user_time} IST")
                                 else:
                                     logger.warning(f"Failed delivering Good Morning message to user {chat_id}")
                             except Exception as send_err:
                                 logger.error(f"Error sending Good Morning message to user {chat_id}: {send_err}")
+                    except Exception as parse_err:
+                        logger.warning(f"Invalid morning_time '{user_time}' for user {u.telegram_chat_id}: {parse_err}")
             except asyncio.CancelledError:
                 logger.info("Good Morning Scheduler loop cancelled.")
                 break
@@ -1647,6 +1856,7 @@ class MultiUserTelegramBot:
         self.app.add_handler(CommandHandler(["users", "admin"], self.cmd_users))
         self.app.add_handler(CommandHandler(["goodmorning", "good_morning", "gm"], self.cmd_goodmorning))
         self.app.add_handler(CommandHandler(["goodmorningnow", "gmnow", "gm_now"], self.cmd_goodmorningnow))
+        self.app.add_handler(CommandHandler(["gmtime", "goodmorningtime", "gm_time"], self.cmd_gm_time))
         self.app.add_handler(CommandHandler(["gm_users", "goodmorning_users"], self.cmd_gm_users))
 
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))

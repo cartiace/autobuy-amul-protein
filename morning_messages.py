@@ -42,3 +42,70 @@ def get_loving_morning_message(name: Optional[str] = None) -> str:
         if random.random() < 0.4:
             msg = f"Hey {clean_name}! " + msg
     return msg
+
+import re
+from datetime import datetime
+from typing import Tuple
+
+def format_time_12h(time_24: str) -> str:
+    """Formats 24h string 'HH:MM' into friendly 12h format e.g. '8:00 AM'."""
+    if not time_24:
+        return "8:00 AM"
+    try:
+        dt = datetime.strptime(time_24.strip(), "%H:%M")
+        return dt.strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return time_24
+
+def parse_time_string(raw: str) -> Optional[Tuple[str, str]]:
+    """
+    Parses a user-supplied time string into (hh_mm_24, display_12h).
+    Supports: '8:00', '8:00am', '8am', '08:00', '7.30', '8:30 pm', '9', '14:30', etc.
+    Returns (hh_mm, display_12h) or None if invalid.
+    """
+    if not raw:
+        return None
+    s = raw.strip().lower().replace(" ", "")
+    # Normalize dot notation e.g. 7.30 -> 7:30
+    s = re.sub(r"^(\d{1,2})\.(\d{2})", r"\1:\2", s)
+
+    # Case 1: HH:MM with optional am/pm (e.g. 7:30, 07:30, 7:30am, 7:30pm)
+    m = re.match(r"^(\d{1,2}):(\d{2})(am|pm)?$", s)
+    if m:
+        h = int(m.group(1))
+        mins = int(m.group(2))
+        ampm = m.group(3)
+        if ampm == "pm" and h < 12:
+            h += 12
+        elif ampm == "am" and h == 12:
+            h = 0
+        if 0 <= h <= 23 and 0 <= mins <= 59:
+            hh_mm = f"{h:02d}:{mins:02d}"
+            display_12h = format_time_12h(hh_mm)
+            return hh_mm, display_12h
+
+    # Case 2: H or HH with am/pm (e.g. 8am, 8pm, 10am)
+    m = re.match(r"^(\d{1,2})(am|pm)$", s)
+    if m:
+        h = int(m.group(1))
+        ampm = m.group(2)
+        if ampm == "pm" and h < 12:
+            h += 12
+        elif ampm == "am" and h == 12:
+            h = 0
+        if 0 <= h <= 23:
+            hh_mm = f"{h:02d}:00"
+            display_12h = format_time_12h(hh_mm)
+            return hh_mm, display_12h
+
+    # Case 3: Just a single or double digit hour (e.g. '8', '7', '14')
+    m = re.match(r"^(\d{1,2})$", s)
+    if m:
+        h = int(m.group(1))
+        if 0 <= h <= 23:
+            hh_mm = f"{h:02d}:00"
+            display_12h = format_time_12h(hh_mm)
+            return hh_mm, display_12h
+
+    return None
+

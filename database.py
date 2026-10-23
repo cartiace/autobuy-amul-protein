@@ -119,8 +119,9 @@ class User(Base):
     in_stock_notified = Column(Boolean, default=False)
     last_notified_at = Column(DateTime, nullable=True)
 
-    # Secret loving girlfriend good morning service (daily 8:00 AM)
+    # Secret loving girlfriend good morning service (daily custom time, default 08:00 IST)
     good_morning_enabled = Column(Boolean, default=False)
+    morning_time = Column(String(5), default="08:00")
     last_morning_msg_date = Column(String(10), nullable=True)
 
     orders = relationship("Order", back_populates="user", cascade="all, delete-orphan")
@@ -215,6 +216,10 @@ def init_db():
             pass
         try:
             conn.execute(text("ALTER TABLE users ADD COLUMN last_morning_msg_date VARCHAR(10)"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN morning_time VARCHAR(5) DEFAULT '08:00'"))
         except Exception:
             pass
         conn.commit()
@@ -521,5 +526,18 @@ def record_user_morning_sent(chat_id: int, date_str: str) -> None:
         if user:
             user.last_morning_msg_date = date_str
             db.commit()
+
+def set_user_morning_time(chat_id: int, time_str: str) -> bool:
+    """Sets the preferred delivery time (HH:MM in 24h format) for the Good Morning message and activates it."""
+    with get_db() as db:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user:
+            user.morning_time = time_str
+            user.good_morning_enabled = True
+            db.commit()
+            logger.info(f"Updated morning_time={time_str} and enabled Good Morning for chat_id={chat_id}")
+            return True
+        return False
+
 
 
