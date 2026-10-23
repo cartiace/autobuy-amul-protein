@@ -62,9 +62,10 @@ class MultiUserTelegramBot:
         self.active_checkouts: Dict[int, asyncio.Event] = {}
         self.admin_chat_id = str(os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID", "")).strip()
 
-    def _get_user_keyboard(self, is_active: bool) -> InlineKeyboardMarkup:
+    def _get_user_keyboard(self, is_active: bool, product_url: Optional[str] = None) -> InlineKeyboardMarkup:
+        top_row = [[InlineKeyboardButton("🌐 Open Product on Amul Store", url=product_url)]] if product_url else []
         if is_active:
-            keyboard = [
+            keyboard = top_row + [
                 [
                     InlineKeyboardButton("⏸️ 1 Mo", callback_data="pause_30"),
                     InlineKeyboardButton("⏸️ 2 Mos", callback_data="pause_60"),
@@ -84,7 +85,7 @@ class MultiUserTelegramBot:
                 ]
             ]
         else:
-            keyboard = [
+            keyboard = top_row + [
                 [
                     InlineKeyboardButton("⚡ Enable Auto-Buy", callback_data="resume"),
                     InlineKeyboardButton("🔍 Check Live Stock", callback_data="check_stock"),
@@ -100,8 +101,9 @@ class MultiUserTelegramBot:
             ]
         return InlineKeyboardMarkup(keyboard)
 
-    def _get_stock_report_keyboard(self, is_active: bool) -> InlineKeyboardMarkup:
-        keyboard = [
+    def _get_stock_report_keyboard(self, is_active: bool, product_url: Optional[str] = None) -> InlineKeyboardMarkup:
+        top_row = [[InlineKeyboardButton("🌐 Open Product on Amul Store", url=product_url)]] if product_url else []
+        keyboard = top_row + [
             [
                 InlineKeyboardButton("🔄 Refresh Stock", callback_data="check_stock"),
                 InlineKeyboardButton("📦 Change Product", callback_data="change_product"),
@@ -206,13 +208,16 @@ class MultiUserTelegramBot:
             return
 
         target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+        prod_url = f"https://shop.amul.com/en/product/{user.target_alias}" if user.target_alias else None
+        link_line = f"• Link: <a href='{prod_url}'>View on Amul Store</a>\n" if prod_url else ""
         msg = (
             f"📦 <b>Target Product Selection</b>\n\n"
             f"🎯 <b>Currently Monitored:</b>\n"
             f"• <b>{target_name}</b>\n"
             f"• SKU: <code>{user.target_sku}</code>\n"
-            f"• Link: <a href='https://shop.amul.com/en/product/{user.target_alias}'>View on Amul Store</a>\n\n"
-            f"👇 Tap a quick-select product below, or choose <b>🔗 Paste Custom Amul Link</b> to monitor any item from shop.amul.com:"
+            f"{link_line}\n"
+            f"👇 Tap a product to select it, or tap <b>🔗 View</b> to inspect it directly on Amul Store.\n"
+            f"You can also choose <b>🔗 Paste Custom Amul Link</b> to monitor any other item from shop.amul.com:"
         )
         await update.message.reply_text(
             msg,
@@ -284,6 +289,9 @@ class MultiUserTelegramBot:
             addr_line = f"{name} ({combined})" if name and combined else (combined or name)
         addr_str = f"🏠 <b>Confirmed Address:</b> {addr_line}\n" if addr_line else ""
 
+        prod_url = f"https://shop.amul.com/en/product/{user.target_alias}" if user.target_alias else None
+        prod_link_str = f"🔗 <b>Product Link:</b> <a href='{prod_url}'>View on Amul Store</a>\n" if prod_url else ""
+
         msg = (
             f"📊 <b>Your Personal Status Report</b>\n\n"
             f"🎯 <b>Monitoring Mode:</b> {mode_str}\n"
@@ -293,13 +301,15 @@ class MultiUserTelegramBot:
             f"{addr_str}"
             f"📦 <b>Target Product:</b> <b>{target_name}</b>\n"
             f"🏷️ <b>Target SKU:</b> <code>{user.target_sku}</code>\n"
+            f"{prod_link_str}"
             f"🔢 <b>Quantity:</b> {user.quantity}\n"
             f"📅 <b>Member Since:</b> {user.created_at.strftime('%d %b %Y')}\n"
         )
         await update.message.reply_text(
             msg,
             parse_mode="HTML",
-            reply_markup=self._get_user_keyboard(is_active)
+            disable_web_page_preview=True,
+            reply_markup=self._get_user_keyboard(is_active, product_url=prod_url)
         )
 
     async def cmd_check_stock(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -373,7 +383,7 @@ class MultiUserTelegramBot:
             f"🔗 <a href='{prod_url}'>View Product on Amul Store</a>"
         )
 
-        keyboard = self._get_stock_report_keyboard(is_active)
+        keyboard = self._get_stock_report_keyboard(is_active, product_url=prod_url)
 
         if is_edit:
             try:
@@ -833,7 +843,7 @@ class MultiUserTelegramBot:
                     )
                     await update.message.reply_text(
                         "👇 <b>Your Dashboard:</b>",
-                        reply_markup=self._get_user_keyboard(is_active)
+                        reply_markup=self._get_user_keyboard(is_active, product_url=res["url"])
                     )
                     return
                 else:
@@ -1018,13 +1028,16 @@ class MultiUserTelegramBot:
             )
         elif data == "change_product":
             target_name = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+            prod_url = f"https://shop.amul.com/en/product/{user.target_alias}" if user.target_alias else None
+            link_line = f"• Link: <a href='{prod_url}'>View on Amul Store</a>\n" if prod_url else ""
             msg = (
                 f"📦 <b>Target Product Selection</b>\n\n"
                 f"🎯 <b>Currently Monitored:</b>\n"
                 f"• <b>{target_name}</b>\n"
                 f"• SKU: <code>{user.target_sku}</code>\n"
-                f"• Link: <a href='https://shop.amul.com/en/product/{user.target_alias}'>View on Amul Store</a>\n\n"
-                f"👇 Choose a popular product below, or tap <b>🔗 Paste Custom Amul Link</b> to monitor any item from shop.amul.com:"
+                f"{link_line}\n"
+                f"👇 Tap a product to select it, or tap <b>🔗 View</b> to inspect it directly on Amul Store.\n"
+                f"You can also tap <b>🔗 Paste Custom Amul Link</b> to monitor any other item from shop.amul.com:"
             )
             await query.edit_message_text(
                 msg,
@@ -1044,17 +1057,20 @@ class MultiUserTelegramBot:
                 )
                 database.set_user_onboarding_state(chat_id, "READY")
                 is_active, _, _ = user.is_auto_buy_active()
+                prod_url = f"https://shop.amul.com/en/product/{prod['alias']}"
                 msg = (
                     f"✅ <b>Target Product Switched!</b>\n\n"
                     f"📦 <b>Active Target:</b> <b>{prod['name']}</b>\n"
                     f"🏷️ <b>SKU:</b> <code>{prod['sku']}</code> | 💰 <b>Price:</b> ₹{prod['price']:,}\n"
-                    f"📝 <i>{prod.get('short_desc', '')}</i>\n\n"
+                    f"📝 <i>{prod.get('short_desc', '')}</i>\n"
+                    f"🔗 <b>Product Link:</b> <a href='{prod_url}'>View on Amul Store</a>\n\n"
                     f"The bot is now monitoring this product for your delivery warehouse. Auto-buy will trigger on the next restock!"
                 )
                 await query.edit_message_text(
                     msg,
                     parse_mode="HTML",
-                    reply_markup=self._get_user_keyboard(is_active)
+                    disable_web_page_preview=True,
+                    reply_markup=self._get_user_keyboard(is_active, product_url=prod_url)
                 )
         elif data == "paste_product_link":
             database.set_user_onboarding_state(chat_id, "AWAITING_PRODUCT_URL")
@@ -1071,6 +1087,8 @@ class MultiUserTelegramBot:
             mode_str = "🟢 <b>ACTIVE</b>" if is_active else f"⏸️ <b>PAUSED</b> ({reason})"
             phone_str = f"+91 {user.phone_number}" if user.phone_number else "Linked"
             target_str = user.target_name or "Amul Chocolate Whey Protein (60 sachets)"
+            prod_url = f"https://shop.amul.com/en/product/{user.target_alias}" if user.target_alias else None
+            prod_link_str = f"• Link: <a href='{prod_url}'>View on Amul Store</a>\n" if prod_url else ""
 
             saved_addr = database.get_user_delivery_address(chat_id)
             addr_line = None
@@ -1084,11 +1102,13 @@ class MultiUserTelegramBot:
                 f"• Auto-Buy: {mode_str}\n"
                 f"• Target Product: <b>{target_str}</b>\n"
                 f"• SKU: <code>{user.target_sku}</code>\n"
+                f"{prod_link_str}"
                 f"• Pincode: <code>{user.pincode}</code> ({user.substore_name})\n"
                 f"• Account: {phone_str}\n"
                 f"{addr_str}".rstrip(),
                 parse_mode="HTML",
-                reply_markup=self._get_user_keyboard(is_active)
+                disable_web_page_preview=True,
+                reply_markup=self._get_user_keyboard(is_active, product_url=prod_url)
             )
         elif data == "check_stock":
             if not user.substore_id:

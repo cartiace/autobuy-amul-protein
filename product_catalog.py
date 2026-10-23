@@ -253,21 +253,25 @@ def resolve_amul_product(
 def get_product_selection_keyboard(current_alias: Optional[str] = None) -> InlineKeyboardMarkup:
     """Generates the interactive Telegram keyboard for selecting curated products or pasting link."""
     keyboard = []
-    # Display curated products in pairs
-    items = list(CURATED_PRODUCTS.values())
-    for i in range(0, len(items), 2):
-        row = []
-        p1 = items[i]
-        label1 = f"✓ {p1['label']}" if current_alias and p1['alias'].lower() == current_alias.lower() else p1['label']
-        row.append(InlineKeyboardButton(label1, callback_data=f"sel_prod_{p1['id']}"))
-        
-        if i + 1 < len(items):
-            p2 = items[i + 1]
-            label2 = f"✓ {p2['label']}" if current_alias and p2['alias'].lower() == current_alias.lower() else p2['label']
-            row.append(InlineKeyboardButton(label2, callback_data=f"sel_prod_{p2['id']}"))
-        keyboard.append(row)
 
-    # Custom URL option & Back button
+    # 0. If user has an active target alias, show direct store button at the top
+    if current_alias:
+        keyboard.append([
+            InlineKeyboardButton("🌐 Open Monitored Product on Amul Store", url=f"{BASE_DOMAIN}/en/product/{current_alias}")
+        ])
+
+    # 1. Curated products: each item gets a selection button and a direct redirect link button
+    items = list(CURATED_PRODUCTS.values())
+    for p in items:
+        is_curr = bool(current_alias and p["alias"].lower() == current_alias.lower())
+        label = f"✓ {p['label']}" if is_curr else p["label"]
+        prod_url = f"{BASE_DOMAIN}/en/product/{p['alias']}"
+        keyboard.append([
+            InlineKeyboardButton(label, callback_data=f"sel_prod_{p['id']}"),
+            InlineKeyboardButton("🔗 View", url=prod_url)
+        ])
+
+    # 2. Custom URL option & Back button
     keyboard.append([
         InlineKeyboardButton("🔗 Paste Custom Amul Link", callback_data="paste_product_link")
     ])
