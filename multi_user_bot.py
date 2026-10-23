@@ -1772,10 +1772,13 @@ class MultiUserTelegramBot:
                 # Notify-Only Mode: Send exactly 1 notification
                 logger.info(f"Sending single stock alert to paused user {chat_id} (Reason: {reason})")
                 notifier = TelegramNotifier(token=self.token, chat_id=str(chat_id))
+                alias = user.target_alias or details.get("alias")
+                prod_url = f"https://shop.amul.com/en/product/{alias}" if alias else None
                 asyncio.create_task(notifier.notify_stock_alert_paused(
                     product_name=user_target_name,
                     stock_qty=stock_qty,
-                    paused_reason=reason
+                    paused_reason=reason,
+                    product_url=prod_url
                 ))
 
     async def handle_warehouse_out_of_stock(self, substore_id: str):

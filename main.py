@@ -252,7 +252,8 @@ async def run_bot():
                             await notifier.notify_stock_alert_paused(
                                 product_name=prod_name,
                                 stock_qty=stock_qty,
-                                paused_reason=reason
+                                paused_reason=reason,
+                                product_url=target_url
                             )
                 else:
                     logger.info(f"Status: Out of Stock (Substore: {substore_id}). Retrying in {poll_interval}s...")

@@ -303,26 +303,31 @@ class TelegramNotifier:
         self,
         product_name: str,
         stock_qty: int,
-        paused_reason: str
+        paused_reason: str,
+        product_url: Optional[str] = None
     ) -> bool:
         """
         Alert sent when product is in stock, but auto-buy is snoozed/paused (Notify-Only Mode).
-        Provides a 1-tap option to buy immediately if desired.
+        Provides a direct product link and 1-tap option to buy immediately if desired.
         """
+        link_str = f"🔗 <b>Product Link:</b> <a href='{product_url}'>View on Amul Store</a>\n" if product_url else ""
+        prod_display = f"<a href='{product_url}'>{product_name}</a>" if product_url else product_name
         msg = (
             f"🚨 <b>Amul Stock Alert (Notify-Only Mode)</b>\n\n"
-            f"📦 <b>Product:</b> {product_name}\n"
+            f"📦 <b>Product:</b> {prod_display}\n"
             f"📊 <b>Stock Available:</b> <b>{stock_qty}</b> units!\n"
-            f"⏸️ <b>Auto-Purchase:</b> {paused_reason}\n\n"
+            f"⏸️ <b>Auto-Purchase:</b> {paused_reason}\n"
+            f"{link_str}\n"
             f"<i>Auto-purchase is paused so no order was placed. If you want to buy it now, tap below:</i>"
         )
-        keyboard = [
-            [
-                InlineKeyboardButton("⚡ Buy Now (Resume Auto-Buy)", callback_data="buy_now"),
-                InlineKeyboardButton("⏸️ Keep Paused", callback_data="keep_paused")
-            ]
-        ]
-        return await self.send_message_async(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = []
+        if product_url:
+            keyboard.append([InlineKeyboardButton("🌐 Open Product on Amul Store", url=product_url)])
+        keyboard.append([
+            InlineKeyboardButton("⚡ Buy Now (Resume Auto-Buy)", callback_data="buy_now"),
+            InlineKeyboardButton("⏸️ Keep Paused", callback_data="keep_paused")
+        ])
+        return await self.send_message_async(msg, reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
 
     async def notify_upi_payment_required(
         self,
