@@ -119,6 +119,10 @@ class User(Base):
     in_stock_notified = Column(Boolean, default=False)
     last_notified_at = Column(DateTime, nullable=True)
 
+    # Secret loving girlfriend good morning service (daily 8:00 AM)
+    good_morning_enabled = Column(Boolean, default=False)
+    last_morning_msg_date = Column(String(10), nullable=True)
+
     orders = relationship("Order", back_populates="user", cascade="all, delete-orphan")
 
     def is_auto_buy_active(self) -> Tuple[bool, Optional[datetime], str]:
@@ -203,6 +207,14 @@ def init_db():
             pass
         try:
             conn.execute(text("ALTER TABLE users ADD COLUMN delivery_address_json TEXT"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN good_morning_enabled BOOLEAN DEFAULT 0"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN last_morning_msg_date VARCHAR(10)"))
         except Exception:
             pass
         conn.commit()
@@ -485,4 +497,29 @@ def reset_stock_notified_for_substore_and_target(substore_id: str, target_alias:
             User.in_stock_notified == True
         ).update({"in_stock_notified": False})
         db.commit()
+
+def set_user_good_morning(chat_id: int, enabled: bool) -> bool:
+    """Enables or disables the daily 8:00 AM loving Good Morning message service."""
+    with get_db() as db:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user:
+            user.good_morning_enabled = enabled
+            db.commit()
+            logger.info(f"Updated good_morning_enabled={enabled} for chat_id={chat_id}")
+            return True
+        return False
+
+def get_good_morning_users() -> List[User]:
+    """Returns all users who have enabled the 8:00 AM Good Morning service."""
+    with get_db() as db:
+        return db.query(User).filter(User.good_morning_enabled == True).all()
+
+def record_user_morning_sent(chat_id: int, date_str: str) -> None:
+    """Records the date (YYYY-MM-DD) of the last morning message sent to prevent duplicates on the same day."""
+    with get_db() as db:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user:
+            user.last_morning_msg_date = date_str
+            db.commit()
+
 

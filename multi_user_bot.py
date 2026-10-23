@@ -12,7 +12,7 @@ import os
 import json
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Document
@@ -39,6 +39,9 @@ from product_catalog import (
     resolve_amul_product,
     extract_alias_from_url
 )
+from morning_messages import get_loving_morning_message
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 logger = logging.getLogger("MultiUserBot")
 
@@ -61,6 +64,7 @@ class MultiUserTelegramBot:
         # Per-user active checkout cancel events: {chat_id: asyncio.Event}
         self.active_checkouts: Dict[int, asyncio.Event] = {}
         self.admin_chat_id = str(os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID", "")).strip()
+        self.morning_task: Optional[asyncio.Task] = None
 
     def _get_user_keyboard(self, is_active: bool, product_url: Optional[str] = None) -> InlineKeyboardMarkup:
         top_row = [[InlineKeyboardButton("🌐 Open Product on Amul Store", url=product_url)]] if product_url else []
@@ -291,6 +295,7 @@ class MultiUserTelegramBot:
 
         prod_url = f"https://shop.amul.com/en/product/{user.target_alias}" if user.target_alias else None
         prod_link_str = f"🔗 <b>Product Link:</b> <a href='{prod_url}'>View on Amul Store</a>\n" if prod_url else ""
+        gm_str = "💖 <b>Good Morning Service:</b> 🌸 Active (Daily 8:00 AM IST)\n" if getattr(user, "good_morning_enabled", False) else ""
 
         msg = (
             f"📊 <b>Your Personal Status Report</b>\n\n"
@@ -302,6 +307,7 @@ class MultiUserTelegramBot:
             f"📦 <b>Target Product:</b> <b>{target_name}</b>\n"
             f"🏷️ <b>Target SKU:</b> <code>{user.target_sku}</code>\n"
             f"{prod_link_str}"
+            f"{gm_str}"
             f"🔢 <b>Quantity:</b> {user.quantity}\n"
             f"📅 <b>Member Since:</b> {user.created_at.strftime('%d %b %Y')}\n"
         )
@@ -552,6 +558,7 @@ class MultiUserTelegramBot:
             autobuy_count = 0
             notify_count = 0
             paused_count = 0
+            gm_count = sum(1 for u in users if getattr(u, "good_morning_enabled", False))
             for u in users:
                 is_act, _, reason = u.is_auto_buy_active()
                 if is_act:
@@ -563,7 +570,7 @@ class MultiUserTelegramBot:
 
             lines = [
                 f"👑 <b>Admin Dashboard: User Directory</b>",
-                f"👥 <b>Total Users:</b> {total} | 🟢 <b>Auto-Buy:</b> {autobuy_count} | 🔔 <b>Notify-Only:</b> {notify_count} | ⏸️ <b>Paused:</b> {paused_count}\n"
+                f"👥 <b>Total Users:</b> {total} | 🟢 <b>Auto-Buy:</b> {autobuy_count} | 🔔 <b>Notify-Only:</b> {notify_count} | ⏸️ <b>Paused:</b> {paused_count} | 💖 <b>GM:</b> {gm_count}\n"
             ]
 
             for i, u in enumerate(users, 1):
@@ -581,9 +588,10 @@ class MultiUserTelegramBot:
                 phone_str = f"+91 {u.phone_number}" if u.phone_number else "No Phone"
                 pincode_str = u.pincode or "N/A"
                 warehouse_str = u.substore_name or "N/A"
+                gm_tag = " | 💖 <i>GM 8am</i>" if getattr(u, "good_morning_enabled", False) else ""
 
                 lines.append(
-                    f"{i}. {stat_emoji} <b>{user_tag}</b> (<code>{u.telegram_chat_id}</code>)\n"
+                    f"{i}. {stat_emoji} <b>{user_tag}</b> (<code>{u.telegram_chat_id}</code>){gm_tag}\n"
                     f"   📱 {phone_str} | 📍 <code>{pincode_str}</code>\n"
                     f"   🏬 {warehouse_str} | Mode: <b>{mode_label}</b> | State: <i>{u.onboarding_state}</i>\n"
                 )
@@ -603,6 +611,119 @@ class MultiUserTelegramBot:
                     await update.message.reply_text(c, parse_mode="HTML")
             else:
                 await update.message.reply_text(full_msg, parse_mode="HTML")
+
+    async def cmd_goodmorning(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        args = context.args or []
+
+        # Check if admin requested users list
+        if args and args[0].lower() in ["users", "subscribers", "list"]:
+            if self.admin_chat_id and str(chat_id) == str(self.admin_chat_id):
+                await self.cmd_gm_users(update, context)
+                return
+            else:
+                await update.message.reply_text("⛔ <b>Access Denied:</b> Admin command only.", parse_mode="HTML")
+                return
+
+        # Check if turning off
+        if args and args[0].lower() in ["off", "stop", "disable"]:
+            database.set_user_good_morning(chat_id, False)
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("☀️ Turn Back On", callback_data="gm_turn_on")],
+                [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")]
+            ])
+            await update.message.reply_text(
+                "💔 <b>Good Morning Service Disabled</b>\n\n"
+                "You won't receive morning messages anymore at 8:00 AM.\n"
+                "Whenever you miss them, you can turn it back on anytime with <code>/goodmorning</code> or tap below!",
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+            return
+
+        user = database.get_user(chat_id)
+        if not user:
+            user = database.get_or_create_user(chat_id, update.effective_user.username)
+
+        is_already_enabled = bool(getattr(user, "good_morning_enabled", False))
+        if not is_already_enabled:
+            database.set_user_good_morning(chat_id, True)
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")],
+            [InlineKeyboardButton("❌ Turn Off Service", callback_data="gm_turn_off")]
+        ])
+
+        if is_already_enabled:
+            status_text = (
+                "🌸 <b>Secret Good Morning Service is ACTIVE!</b> 🥰\n\n"
+                "⏰ <b>Scheduled Time:</b> Every day at <b>8:00 AM IST</b>\n"
+                "💌 <b>What to expect:</b> A sweet, warm, caring good morning message from your loving girlfriend to start your morning right! 💕✨\n\n"
+                "Want one right this second? Send <code>/goodmorningnow</code> or tap below! 👇"
+            )
+        else:
+            status_text = (
+                "💖 <b>Secret Good Morning Service Activated!</b> ☀️🥰\n\n"
+                "Starting tomorrow morning, you will receive a loving, sweet, and caring good morning message from your girlfriend every day at <b>8:00 AM IST</b>! 🌸✨\n\n"
+                "Can't wait until 8 AM? Send <code>/goodmorningnow</code> or tap below to receive one right now! 👇"
+            )
+
+        await update.message.reply_text(status_text, parse_mode="HTML", reply_markup=keyboard)
+
+    async def cmd_goodmorningnow(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        user = database.get_user(chat_id)
+        name = (user.telegram_username if user and user.telegram_username else None) or (update.effective_user.first_name if update.effective_user else None)
+        msg = get_loving_morning_message(name)
+
+        is_enabled = bool(getattr(user, "good_morning_enabled", False)) if user else False
+        buttons = [
+            [InlineKeyboardButton("💌 Another One!", callback_data="gm_send_now")]
+        ]
+        if not is_enabled:
+            buttons.append([InlineKeyboardButton("☀️ Enable Daily at 8:00 AM", callback_data="gm_turn_on")])
+        else:
+            buttons.append([InlineKeyboardButton("❌ Turn Off Daily 8 AM", callback_data="gm_turn_off")])
+
+        keyboard = InlineKeyboardMarkup(buttons)
+        await update.message.reply_text(msg, reply_markup=keyboard)
+
+    async def cmd_gm_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        if not self.admin_chat_id or str(chat_id) != str(self.admin_chat_id):
+            await update.message.reply_text("⛔ <b>Access Denied:</b> Admin command only.", parse_mode="HTML")
+            return
+
+        gm_users = database.get_good_morning_users()
+        if not gm_users:
+            await update.message.reply_text(
+                "ℹ️ <b>Good Morning Service:</b>\nNo users have enabled the Good Morning service yet.",
+                parse_mode="HTML"
+            )
+            return
+
+        lines = [
+            f"💖 <b>Admin: Good Morning Service Subscribers</b>",
+            f"👥 <b>Total Subscribers:</b> {len(gm_users)} (Scheduled daily at 8:00 AM IST)\n"
+        ]
+
+        for i, u in enumerate(gm_users, 1):
+            user_tag = f"@{u.telegram_username}" if u.telegram_username else f"User {u.telegram_chat_id}"
+            phone_str = f"+91 {u.phone_number}" if u.phone_number else "No Phone"
+            last_sent = u.last_morning_msg_date or "Never"
+            lines.append(
+                f"{i}. 🌸 <b>{user_tag}</b> (<code>{u.telegram_chat_id}</code>)\n"
+                f"   📱 {phone_str} | 📍 <code>{u.pincode or 'N/A'}</code> ({u.substore_name or 'N/A'})\n"
+                f"   📅 Last Sent: <b>{last_sent}</b>\n"
+            )
+
+        full_msg = "\n".join(lines)
+        if len(full_msg) > 4000:
+            chunks = [full_msg[i:i+4000] for i in range(0, len(full_msg), 4000)]
+            for c in chunks:
+                await update.message.reply_text(c, parse_mode="HTML")
+        else:
+            await update.message.reply_text(full_msg, parse_mode="HTML")
 
     async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
@@ -1166,6 +1287,47 @@ class MultiUserTelegramBot:
                     await admin_notifier.send_message_async(admin_msg)
                 except Exception as e:
                     logger.warning(f"Could not send admin deletion alert: {e}")
+        elif data == "gm_send_now":
+            name = (user.telegram_username if user and user.telegram_username else None) or (query.from_user.first_name if query.from_user else None)
+            msg = get_loving_morning_message(name)
+            is_enabled = bool(getattr(user, "good_morning_enabled", False)) if user else False
+            buttons = [
+                [InlineKeyboardButton("💌 Another One!", callback_data="gm_send_now")]
+            ]
+            if not is_enabled:
+                buttons.append([InlineKeyboardButton("☀️ Enable Daily at 8:00 AM", callback_data="gm_turn_on")])
+            else:
+                buttons.append([InlineKeyboardButton("❌ Turn Off Daily 8 AM", callback_data="gm_turn_off")])
+            keyboard = InlineKeyboardMarkup(buttons)
+            await query.message.reply_text(msg, reply_markup=keyboard)
+
+        elif data == "gm_turn_off":
+            database.set_user_good_morning(chat_id, False)
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("☀️ Turn Back On", callback_data="gm_turn_on")],
+                [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")]
+            ])
+            await query.edit_message_text(
+                "💔 <b>Good Morning Service Disabled</b>\n\n"
+                "You won't receive morning messages at 8:00 AM anymore.\n"
+                "Tap below or send <code>/goodmorning</code> whenever you want to re-enable it!",
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+
+        elif data == "gm_turn_on":
+            database.set_user_good_morning(chat_id, True)
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💌 Send One Right Now", callback_data="gm_send_now")],
+                [InlineKeyboardButton("❌ Turn Off Service", callback_data="gm_turn_off")]
+            ])
+            await query.edit_message_text(
+                "💖 <b>Secret Good Morning Service Activated!</b> ☀️🥰\n\n"
+                "You're all set! You will receive sweet and loving good morning messages every day at <b>8:00 AM IST</b>! 🌸✨\n\n"
+                "Tap below if you want one right now! 👇",
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
 
     async def dispatch_user_checkout(self, user: User, product_name: str, stock_qty: int, details: Optional[dict] = None):
         """
@@ -1424,6 +1586,46 @@ class MultiUserTelegramBot:
         """
         database.reset_stock_notified_for_substore(substore_id)
 
+    async def _morning_scheduler_loop(self):
+        """
+        Background scheduler running 24/7.
+        Every morning at 8:00 AM IST, dispatches a sweet and loving girlfriend good morning
+        message to all subscribed users. Guarantees exactly one message per subscriber per day.
+        """
+        logger.info("Good Morning Scheduler loop started (checks every 30s for 8:00 AM IST).")
+        while True:
+            try:
+                now_ist = datetime.now(IST)
+                if now_ist.hour == 8:
+                    today_str = now_ist.strftime("%Y-%m-%d")
+                    subscribers = database.get_good_morning_users()
+                    for u in subscribers:
+                        if u.last_morning_msg_date != today_str:
+                            chat_id = u.telegram_chat_id
+                            name = u.telegram_username
+                            msg = get_loving_morning_message(name)
+                            try:
+                                notifier = TelegramNotifier(token=self.token, chat_id=str(chat_id))
+                                keyboard = InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("💌 Another One!", callback_data="gm_send_now")],
+                                    [InlineKeyboardButton("❌ Turn Off", callback_data="gm_turn_off")]
+                                ])
+                                success = await notifier.send_message_async(msg, reply_markup=keyboard)
+                                if success:
+                                    database.record_user_morning_sent(chat_id, today_str)
+                                    logger.info(f"Delivered 8:00 AM Good Morning message to user {chat_id} (@{u.telegram_username})")
+                                else:
+                                    logger.warning(f"Failed delivering Good Morning message to user {chat_id}")
+                            except Exception as send_err:
+                                logger.error(f"Error sending Good Morning message to user {chat_id}: {send_err}")
+            except asyncio.CancelledError:
+                logger.info("Good Morning Scheduler loop cancelled.")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error in Good Morning scheduler loop: {e}", exc_info=True)
+
+            await asyncio.sleep(30)
+
     async def start(self):
         """Initializes and starts the Multi-User Telegram Bot."""
         logger.info("Starting Multi-User Telegram Bot Application...")
@@ -1443,6 +1645,9 @@ class MultiUserTelegramBot:
         self.app.add_handler(CommandHandler(["cancel", "abort"], self.cmd_cancel))
         self.app.add_handler(CommandHandler(["stop", "delete_account", "deregister"], self.cmd_stop))
         self.app.add_handler(CommandHandler(["users", "admin"], self.cmd_users))
+        self.app.add_handler(CommandHandler(["goodmorning", "good_morning", "gm"], self.cmd_goodmorning))
+        self.app.add_handler(CommandHandler(["goodmorningnow", "gmnow", "gm_now"], self.cmd_goodmorningnow))
+        self.app.add_handler(CommandHandler(["gm_users", "goodmorning_users"], self.cmd_gm_users))
 
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
         self.app.add_handler(MessageHandler(filters.Document.ALL, self.handle_document_message))
@@ -1451,9 +1656,16 @@ class MultiUserTelegramBot:
         await self.app.initialize()
         await self.app.start()
         await self.app.updater.start_polling(drop_pending_updates=True)
-        logger.info("Multi-User Telegram Bot is active with Native In-Chat OTP Login.")
+        self.morning_task = asyncio.create_task(self._morning_scheduler_loop())
+        logger.info("Multi-User Telegram Bot is active with Native In-Chat OTP Login and Good Morning Scheduler.")
 
     async def stop(self):
+        if hasattr(self, "morning_task") and self.morning_task and not self.morning_task.done():
+            self.morning_task.cancel()
+            try:
+                await self.morning_task
+            except asyncio.CancelledError:
+                pass
         if self.app:
             if self.app.updater and self.app.updater.running:
                 await self.app.updater.stop()
