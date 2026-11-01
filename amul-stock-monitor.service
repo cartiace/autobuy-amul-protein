@@ -6,10 +6,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/Desktop/Automation
-ExecStart=%h/Desktop/Automation/venv/bin/python %h/Desktop/Automation/main.py
+ExecStart=%h/Desktop/Automation/venv/bin/python %h/Desktop/Automation/failover_manager.py
 Restart=on-failure
-RestartSec=30
+RestartSec=15
 Environment=PYTHONUNBUFFERED=1
+Environment=NODE_ROLE=primary
+Environment=NODE_ID=laptop
 
 [Install]
 WantedBy=default.target

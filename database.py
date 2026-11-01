@@ -72,7 +72,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///amul_bot.db").strip()
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
-    pool_pre_ping=True
+    pool_pre_ping=True,
+    pool_recycle=300
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -176,6 +177,15 @@ class DeletedUserLog(Base):
     substore_name = Column(String(100), nullable=True)
     reason = Column(String(255), default="User requested deletion")
     deleted_at = Column(DateTime, default=datetime.utcnow)
+
+class ClusterLeader(Base):
+    __tablename__ = "cluster_leader"
+
+    id = Column(Integer, primary_key=True, default=1)
+    active_node = Column(String(50), nullable=False) # e.g. "laptop" or "windows-pc"
+    role = Column(String(20), default="primary")      # "primary" or "backup"
+    priority = Column(Integer, default=10)           # 10 for primary, 1 for backup
+    last_heartbeat = Column(DateTime, default=datetime.utcnow)
 
 # ==========================================
 # Database Helper Utilities
@@ -538,6 +548,29 @@ def set_user_morning_time(chat_id: int, time_str: str) -> bool:
             logger.info(f"Updated morning_time={time_str} and enabled Good Morning for chat_id={chat_id}")
             return True
         return False
+
+def get_cluster_leader() -> Optional[ClusterLeader]:
+    """Returns the current leader entry from cluster_leader table."""
+    with get_db() as db:
+        return db.query(ClusterLeader).filter(ClusterLeader.id == 1).first()
+
+def record_cluster_heartbeat(node_id: str, role: str = "primary", priority: int = 10) -> ClusterLeader:
+    """Updates or creates the heartbeat record for the current active node."""
+    with get_db() as db:
+        leader = db.query(ClusterLeader).filter(ClusterLeader.id == 1).first()
+        now = datetime.utcnow()
+        if not leader:
+            leader = ClusterLeader(id=1, active_node=node_id, role=role, priority=priority, last_heartbeat=now)
+            db.add(leader)
+        else:
+            leader.active_node = node_id
+            leader.role = role
+            leader.priority = priority
+            leader.last_heartbeat = now
+        db.commit()
+        db.refresh(leader)
+        return leader
+
 
 
 
