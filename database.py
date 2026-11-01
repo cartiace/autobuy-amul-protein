@@ -187,6 +187,10 @@ class ClusterLeader(Base):
     priority = Column(Integer, default=10)           # 10 for primary, 1 for backup
     last_heartbeat = Column(DateTime, default=datetime.utcnow)
 
+    @property
+    def node_id(self) -> str:
+        return self.active_node
+
 # ==========================================
 # Database Helper Utilities
 # ==========================================

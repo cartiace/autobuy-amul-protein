@@ -165,9 +165,9 @@ class FailoverSupervisor:
                 # ─────────────────────────────────────────────────────────────
                 # BRANCH B: This is the BACKUP NODE (Windows PC)
                 # ─────────────────────────────────────────────────────────────
-                else:
+                    active_leader_id = getattr(leader, "active_node", getattr(leader, "node_id", "unknown"))
                     primary_is_active = (
-                        is_leader_alive and leader.role == "primary" and leader.node_id != NODE_ID
+                        is_leader_alive and leader.role == "primary" and active_leader_id != NODE_ID
                     )
 
                     if primary_is_active:
@@ -177,7 +177,7 @@ class FailoverSupervisor:
                             self.stop_bot()
                         
                         if time.time() - last_standby_log > 60:
-                            logger.info(f"💤 [STANDBY] Primary node '{leader.node_id}' is active (Heartbeat {int(leader_age_secs)}s ago). Standing by...")
+                            logger.info(f"💤 [STANDBY] Primary node '{active_leader_id}' is active (Heartbeat {int(leader_age_secs)}s ago). Standing by...")
                             last_standby_log = time.time()
 
                     else:
