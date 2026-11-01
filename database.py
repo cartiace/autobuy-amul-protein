@@ -558,22 +558,55 @@ def get_cluster_leader() -> Optional[ClusterLeader]:
     with get_db() as db:
         return db.query(ClusterLeader).filter(ClusterLeader.id == 1).first()
 
-def record_cluster_heartbeat(node_id: str, role: str = "primary", priority: int = 10) -> ClusterLeader:
-    """Updates or creates the heartbeat record for the current active node."""
+def get_cluster_state(timeout_seconds: int = 35) -> dict:
+    """
+    Returns cluster state calculated entirely on the database server.
+    Eliminates all local clock skew between Linux and Windows nodes.
+    """
+    from sqlalchemy import text
     with get_db() as db:
-        leader = db.query(ClusterLeader).filter(ClusterLeader.id == 1).first()
-        now = datetime.utcnow()
-        if not leader:
-            leader = ClusterLeader(id=1, active_node=node_id, role=role, priority=priority, last_heartbeat=now)
-            db.add(leader)
-        else:
-            leader.active_node = node_id
-            leader.role = role
-            leader.priority = priority
-            leader.last_heartbeat = now
+        res = db.execute(text("""
+            SELECT 
+                active_node, 
+                role, 
+                priority, 
+                COALESCE(EXTRACT(EPOCH FROM (NOW() AT TIME ZONE 'UTC' - last_heartbeat)), 9999) AS age_seconds
+            FROM cluster_leader 
+            WHERE id = 1
+        """)).fetchone()
+        
+        if not res or res[0] is None:
+            return {
+                "active_node": None,
+                "role": None,
+                "priority": 0,
+                "age_seconds": 9999.0,
+                "is_alive": False
+            }
+        
+        age = float(res[3])
+        return {
+            "active_node": res[0],
+            "role": res[1],
+            "priority": res[2],
+            "age_seconds": age,
+            "is_alive": age < timeout_seconds
+        }
+
+def record_cluster_heartbeat(node_id: str, role: str = "primary", priority: int = 10) -> None:
+    """Updates or creates the heartbeat record for the current active node using Neon database time."""
+    from sqlalchemy import text
+    with get_db() as db:
+        db.execute(text("""
+            INSERT INTO cluster_leader (id, active_node, role, priority, last_heartbeat)
+            VALUES (1, :node, :role, :priority, NOW() AT TIME ZONE 'UTC')
+            ON CONFLICT (id) DO UPDATE SET
+                active_node = EXCLUDED.active_node,
+                role = EXCLUDED.role,
+                priority = EXCLUDED.priority,
+                last_heartbeat = NOW() AT TIME ZONE 'UTC';
+        """), {"node": node_id, "role": role, "priority": priority})
         db.commit()
-        db.refresh(leader)
-        return leader
 
 
 

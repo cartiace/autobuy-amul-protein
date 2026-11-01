@@ -142,15 +142,11 @@ class FailoverSupervisor:
         # 3. Main Watchdog Loop
         while self.is_running:
             try:
-                now = datetime.now(timezone.utc).replace(tzinfo=None)
-                leader = database.get_cluster_leader()
-
-                # Determine if leader heartbeat is alive
-                is_leader_alive = False
-                leader_age_secs = 9999
-                if leader and leader.last_heartbeat:
-                    leader_age_secs = (now - leader.last_heartbeat).total_seconds()
-                    is_leader_alive = leader_age_secs < FAILOVER_TIMEOUT
+                state = database.get_cluster_state(timeout_seconds=FAILOVER_TIMEOUT)
+                is_leader_alive = state["is_alive"]
+                leader_age_secs = state["age_seconds"]
+                active_leader_id = state["active_node"] or "none"
+                leader_role = state["role"] or "none"
 
                 # ─────────────────────────────────────────────────────────────
                 # BRANCH A: This is the PRIMARY NODE (Laptop)
@@ -166,9 +162,8 @@ class FailoverSupervisor:
                 # BRANCH B: This is the BACKUP NODE (Windows PC)
                 # ─────────────────────────────────────────────────────────────
                 else:
-                    active_leader_id = getattr(leader, "active_node", getattr(leader, "node_id", "unknown"))
                     primary_is_active = (
-                        is_leader_alive and leader.role == "primary" and active_leader_id != NODE_ID
+                        is_leader_alive and leader_role == "primary" and active_leader_id != NODE_ID
                     )
 
                     if primary_is_active:

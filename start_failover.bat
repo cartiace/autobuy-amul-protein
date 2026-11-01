@@ -23,6 +23,10 @@ if exist venv\Scripts\activate.bat (
 if "%NODE_ROLE%"=="" set NODE_ROLE=backup
 if "%NODE_ID%"=="" set NODE_ID=windows-pc
 
+:start
+:: Ensure no orphaned bot instance is lingering in the background
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*server.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+
 echo Starting Failover Manager as %NODE_ROLE% node (%NODE_ID%)...
 python failover_manager.py
 
