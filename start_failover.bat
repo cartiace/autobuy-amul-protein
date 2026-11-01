@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 title Amul Failover Supervisor (Backup Node)
 echo ====================================================================
 echo      AMUL HIGH-AVAILABILITY FAILOVER SUPERVISOR (WINDOWS PC)        
