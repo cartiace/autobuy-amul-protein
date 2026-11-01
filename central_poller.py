@@ -41,7 +41,7 @@ class CentralStockPoller:
             substore_id="",
             target_alias=self.target_alias,
             target_sku=self.target_sku,
-            cookies_file=self.cookies_file if os.path.exists(self.cookies_file) else None
+            cookies_file=self.cookies_file
         )
         self.monitor.refresh_session_tid()
 

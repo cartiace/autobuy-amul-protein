@@ -3,6 +3,7 @@ Stock monitoring module for Amul's e-commerce platform (StoreHippo engine).
 Polls internal JSON product API with regional substore ID.
 """
 
+import os
 import time
 import json
 import logging
@@ -23,12 +24,12 @@ class StockMonitor:
         substore_id: str,
         target_alias: str = "amul-chocolate-whey-protein-34-g-or-pack-of-60-sachets",
         target_sku: str = "WPCCP05_02",
-        cookies_file: Optional[str] = None
+        cookies_file: Optional[str] = "cookies.json"
     ):
         self.substore_id = substore_id.strip()
         self.target_alias = target_alias.strip()
         self.target_sku = target_sku.strip()
-        self.cookies_file = cookies_file
+        self.cookies_file = cookies_file or "cookies.json"
 
         self.session = requests.Session()
         self.session_tid = None
@@ -41,26 +42,58 @@ class StockMonitor:
             "Accept-Language": "en-IN,en;q=0.9",
         })
 
-        if cookies_file:
-            self._load_cookies(cookies_file)
+        self._load_cookies(self.cookies_file)
 
-    def _load_cookies(self, path: str):
-        """Loads cookies from json into requests session."""
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                cookies = json.load(f)
+    def _load_cookies(self, path: Optional[str]):
+        """
+        Loads cookies from json into requests session.
+        Automatically syncs cookies to Neon database, and recovers from Neon if the local file is missing.
+        """
+        file_path = path or "cookies.json"
+        cookies = None
+
+        # 1. Attempt loading from disk
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    cookies = json.load(f)
+                # Sync to Neon database so backup nodes (Windows) always have the latest cookies
+                try:
+                    import database
+                    database.set_cluster_setting("monitor_cookies", json.dumps(cookies))
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning(f"Error loading cookies from {file_path}: {e}")
+
+        # 2. Fallback to Neon cloud database if file is absent on this node
+        if not cookies:
+            try:
+                import database
+                db_cookies_str = database.get_cluster_setting("monitor_cookies")
+                if db_cookies_str:
+                    cookies = json.loads(db_cookies_str)
+                    logger.info("Retrieved valid monitor cookies from shared Neon database!")
+                    # Save locally so subsequent runs find it on disk
+                    try:
+                        with open(file_path, "w", encoding="utf-8") as f:
+                            json.dump(cookies, f, indent=4)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"Could not load cookies from database: {e}")
+
+        # 3. Apply cookies to session
+        if cookies:
             for c in cookies:
-                # Handle cookie dict from browser extensions
                 name = c.get("name")
                 value = c.get("value")
                 domain = c.get("domain", "shop.amul.com").lstrip(".")
                 if name and value:
                     self.session.cookies.set(name, value, domain=domain)
-            logger.info(f"Loaded {len(cookies)} cookies from {path} into monitor session.")
-        except FileNotFoundError:
-            logger.debug(f"Cookies file {path} not found for monitor. Proceeding with fresh session.")
-        except Exception as e:
-            logger.warning(f"Error loading cookies for monitor from {path}: {e}")
+            logger.info(f"Loaded {len(cookies)} cookies into monitor session.")
+        else:
+            logger.warning(f"No cookies found in {file_path} or Neon database. Proceeding with fresh session.")
 
     def refresh_session_tid(self) -> bool:
         """

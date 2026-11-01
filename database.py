@@ -191,6 +191,13 @@ class ClusterLeader(Base):
     def node_id(self) -> str:
         return self.active_node
 
+class ClusterSetting(Base):
+    __tablename__ = "cluster_settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 # ==========================================
 # Database Helper Utilities
 # ==========================================
@@ -607,6 +614,23 @@ def record_cluster_heartbeat(node_id: str, role: str = "primary", priority: int 
                 last_heartbeat = NOW() AT TIME ZONE 'UTC';
         """), {"node": node_id, "role": role, "priority": priority})
         db.commit()
+
+def set_cluster_setting(key: str, value: str) -> None:
+    """Saves a key-value cluster setting in database."""
+    with get_db() as db:
+        setting = db.query(ClusterSetting).filter(ClusterSetting.key == key).first()
+        if not setting:
+            setting = ClusterSetting(key=key, value=value)
+            db.add(setting)
+        else:
+            setting.value = value
+        db.commit()
+
+def get_cluster_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Retrieves a key-value cluster setting from database."""
+    with get_db() as db:
+        setting = db.query(ClusterSetting).filter(ClusterSetting.key == key).first()
+        return setting.value if setting else default
 
 
 
