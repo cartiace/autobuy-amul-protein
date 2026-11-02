@@ -442,13 +442,23 @@ def get_deleted_user_logs(limit: int = 50) -> List[DeletedUserLog]:
             .all()
         )
 
-def should_notify_user_stock(chat_id: int) -> bool:
-    """Returns True if the user has NOT yet been notified for the current in-stock event."""
+def should_notify_user_stock(chat_id: int, cooldown_seconds: int = 900) -> bool:
+    """
+    Returns True if the user has NOT yet been notified for the current in-stock event,
+    AND at least cooldown_seconds (default 15 minutes) have elapsed since the last alert.
+    Strictly prevents notification spam during rapid API flapping or restock events.
+    """
     with get_db() as db:
         user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
         if not user:
             return False
-        return not bool(user.in_stock_notified)
+        if bool(user.in_stock_notified):
+            return False
+        if user.last_notified_at:
+            elapsed = (datetime.utcnow() - user.last_notified_at).total_seconds()
+            if elapsed < cooldown_seconds:
+                return False
+        return True
 
 def mark_user_stock_notified(chat_id: int, notified: bool = True) -> None:
     """Marks user as notified (or resets notification flag) for current stock."""

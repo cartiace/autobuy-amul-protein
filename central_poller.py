@@ -26,7 +26,7 @@ class CentralStockPoller:
         target_sku: str = "WPCCP05_02",
         cookies_file: str = "cookies.json",
         on_stock_detected: Optional[Callable[[str, int, Dict[str, Any], List[User]], Any]] = None,
-        on_out_of_stock: Optional[Callable[[str], Any]] = None
+        on_out_of_stock: Optional[Callable[..., Any]] = None
     ):
         self.poll_interval = poll_interval
         self.target_alias = target_alias
@@ -95,10 +95,10 @@ class CentralStockPoller:
                                 await res
                     else:
                         logger.debug(f"Warehouse {sid} - '{alias}': Out of stock.")
-                        # Reset notification flag only for this product in this warehouse
+                        # Reset notification flag strictly for this product in this warehouse
                         database.reset_stock_notified_for_substore_and_target(sid, alias)
                         if self.on_out_of_stock:
-                            res = self.on_out_of_stock(sid)
+                            res = self.on_out_of_stock(sid, alias)
                             if asyncio.iscoroutine(res):
                                 await res
 

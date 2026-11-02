@@ -1781,12 +1781,15 @@ class MultiUserTelegramBot:
                     product_url=prod_url
                 ))
 
-    async def handle_warehouse_out_of_stock(self, substore_id: str):
+    async def handle_warehouse_out_of_stock(self, substore_id: str, target_alias: Optional[str] = None):
         """
-        Triggered when warehouse drops to 0 stock.
-        Resets notification state in database so users are alerted on next restock.
+        Triggered when a product drops to 0 stock in a warehouse.
+        Resets notification state strictly for users tracking that specific product.
         """
-        database.reset_stock_notified_for_substore(substore_id)
+        if target_alias:
+            database.reset_stock_notified_for_substore_and_target(substore_id, target_alias)
+        else:
+            database.reset_stock_notified_for_substore(substore_id)
 
     async def _morning_scheduler_loop(self):
         """
